@@ -1,6 +1,39 @@
 // ========================================
+// Utility Functions (defined first)
+// ========================================
+function estimateMemoryMB() {
+  try {
+    if (self.performance && self.performance.memory) {
+      return self.performance.memory.usedJSHeapSize / (1024 * 1024);
+    }
+  } catch (e) {
+    console.warn('[worker] Memory estimation not available:', e);
+  }
+  return 0;
+}
+
+// Send log messages to UI for debugging
+function sendLog(level, message, data = null) {
+  console.log(`[worker] ${level}: ${message}`, data || '');
+  self.postMessage({
+    type: 'DEBUG_LOG',
+    level: level,
+    message: message,
+    data: data,
+    timestamp: Date.now()
+  });
+}
+
+// ========================================
 // Worker State Management
 // ========================================
+console.log('[worker] ========================================');
+console.log('[worker] Worker script loaded and initialized');
+console.log('[worker] ========================================');
+
+// Send initialization log
+sendLog('INFO', 'Worker initialized and ready');
+
 let currentFile = null;
 let topics = { scan: '/scan', odom: '/odom', tf: '/tf' };
 let config = { resolution: 0.05, width: 2000, height: 2000, downsample: 1 };
@@ -10,6 +43,8 @@ let playbackSpeed = 1.0;
 self.addEventListener('message', async event => {
   const { type } = event.data;
   console.log('[worker] Received message:', type, event.data);
+
+  try {
 
   switch (type) {
     case 'OPEN':
@@ -44,27 +79,50 @@ self.addEventListener('message', async event => {
     default:
       console.warn('[worker] Unknown message', event.data);
   }
+  } catch (error) {
+    console.error('[worker] Error handling message:', error);
+    self.postMessage({
+      type: 'ERROR',
+      code: 'WORKER_ERROR',
+      message: `Worker error: ${error.message}`
+    });
+  }
 });
 
 // ========================================
 // File Handling
 // ========================================
 async function handleOpenFile(file) {
-  console.log('[worker] Opening file:', file?.name, 'size:', file?.size);
+  sendLog('INFO', '========== handleOpenFile START ==========');
+  sendLog('INFO', `File received - name: ${file?.name}, size: ${file?.size}, type: ${typeof file}`);
+
   currentFile = file;
 
   if (!file) {
-    console.error('[worker] No file provided');
+    sendLog('ERROR', 'No file provided');
     self.postMessage({ type: 'ERROR', code: 'NO_FILE', message: 'ファイルが提供されませんでした' });
     return;
   }
 
-  // Send initial stats
-  self.postMessage({ type: 'STATS', stats: { fps: 0, wasmMs: 0, memMB: estimateMemoryMB() } });
+  try {
+    // Send initial stats
+    sendLog('INFO', 'Sending initial STATS message');
+    self.postMessage({ type: 'STATS', stats: { fps: 0, wasmMs: 0, memMB: estimateMemoryMB() } });
 
-  // Generate a test map to verify the pipeline
-  console.log('[worker] Generating test map...');
-  await generateTestMap();
+    // Generate a test map to verify the pipeline
+    sendLog('INFO', 'Calling generateTestMap()');
+    await generateTestMap();
+    sendLog('INFO', 'generateTestMap() completed successfully');
+  } catch (error) {
+    sendLog('ERROR', `Error in handleOpenFile: ${error.message}`, error.stack);
+    self.postMessage({
+      type: 'ERROR',
+      code: 'FILE_OPEN_ERROR',
+      message: `ファイルオープンエラー: ${error.message}`
+    });
+  }
+
+  sendLog('INFO', '========== handleOpenFile END ==========');
 }
 
 // ========================================
@@ -117,66 +175,82 @@ function handleSetSpeed(speed) {
 // Test Map Generation
 // ========================================
 async function generateTestMap() {
-  console.log('[worker] Creating test map canvas...');
+  sendLog('INFO', '========== generateTestMap START ==========');
 
-  const width = 400;
-  const height = 400;
+  try {
+    sendLog('INFO', 'Step 1: Setting canvas dimensions (400x400)');
+    const width = 400;
+    const height = 400;
 
-  // Create an OffscreenCanvas for generating the test map
-  const canvas = new OffscreenCanvas(width, height);
-  const ctx = canvas.getContext('2d');
+    sendLog('INFO', 'Step 2: Creating OffscreenCanvas');
+    const canvas = new OffscreenCanvas(width, height);
 
-  // Draw a test pattern
-  // Background (unknown space - gray)
-  ctx.fillStyle = '#808080';
-  ctx.fillRect(0, 0, width, height);
+    sendLog('INFO', 'Step 3: Getting 2D context');
+    const ctx = canvas.getContext('2d');
 
-  // Free space (white)
-  ctx.fillStyle = '#FFFFFF';
-  ctx.fillRect(50, 50, 300, 300);
+    sendLog('INFO', 'Step 4: Drawing test pattern');
+    // Background (unknown space - gray)
+    ctx.fillStyle = '#808080';
+    ctx.fillRect(0, 0, width, height);
 
-  // Obstacles (black)
-  ctx.fillStyle = '#000000';
-  // Border walls
-  ctx.fillRect(50, 50, 300, 10); // top wall
-  ctx.fillRect(50, 340, 300, 10); // bottom wall
-  ctx.fillRect(50, 50, 10, 300); // left wall
-  ctx.fillRect(340, 50, 10, 300); // right wall
+    // Free space (white)
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(50, 50, 300, 300);
 
-  // Some obstacles in the middle
-  ctx.fillRect(150, 150, 50, 50);
-  ctx.fillRect(250, 200, 40, 80);
+    // Obstacles (black)
+    ctx.fillStyle = '#000000';
+    // Border walls
+    ctx.fillRect(50, 50, 300, 10); // top wall
+    ctx.fillRect(50, 340, 300, 10); // bottom wall
+    ctx.fillRect(50, 50, 10, 300); // left wall
+    ctx.fillRect(340, 50, 10, 300); // right wall
 
-  // Add text to indicate it's a test map
-  ctx.fillStyle = '#FF0000';
-  ctx.font = 'bold 20px sans-serif';
-  ctx.fillText('TEST MAP', 150, 30);
+    // Some obstacles in the middle
+    ctx.fillRect(150, 150, 50, 50);
+    ctx.fillRect(250, 200, 40, 80);
 
-  console.log('[worker] Converting canvas to ImageBitmap...');
-  const imageBitmap = await canvas.transferToImageBitmap();
+    // Add text to indicate it's a test map
+    ctx.fillStyle = '#FF0000';
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillText('TEST MAP', 150, 30);
 
-  console.log('[worker] Sending GRID_FRAME message...');
-  const stamp = Date.now() * 1000; // Convert to microseconds
-  self.postMessage({
-    type: 'GRID_FRAME',
-    imageBitmap: imageBitmap,
-    stamp: stamp
-  }, [imageBitmap]);
+    sendLog('INFO', 'Step 5: Converting canvas to ImageBitmap');
+    const imageBitmap = canvas.transferToImageBitmap();
+    sendLog('INFO', `ImageBitmap created: ${imageBitmap.width}x${imageBitmap.height}`);
 
-  console.log('[worker] Test map sent successfully');
+    sendLog('INFO', 'Step 6: Preparing GRID_FRAME message');
+    const stamp = Date.now() * 1000; // Convert to microseconds
 
-  // Send test pose
-  self.postMessage({
-    type: 'POSE',
-    pose: { x: 200, y: 200, theta: 0 },
-    stamp: stamp
-  });
+    sendLog('INFO', 'Step 7: Sending GRID_FRAME message');
+    self.postMessage({
+      type: 'GRID_FRAME',
+      imageBitmap: imageBitmap,
+      stamp: stamp
+    }, [imageBitmap]);
+    sendLog('INFO', 'GRID_FRAME message sent successfully');
 
-  // Update stats
-  self.postMessage({
-    type: 'STATS',
-    stats: { fps: 30, wasmMs: 5.2, memMB: estimateMemoryMB() }
-  });
+    sendLog('INFO', 'Step 8: Sending POSE message');
+    self.postMessage({
+      type: 'POSE',
+      pose: { x: 200, y: 200, theta: 0 },
+      stamp: stamp
+    });
+
+    sendLog('INFO', 'Step 9: Sending STATS update');
+    self.postMessage({
+      type: 'STATS',
+      stats: { fps: 30, wasmMs: 5.2, memMB: estimateMemoryMB() }
+    });
+
+    sendLog('INFO', '========== generateTestMap END (SUCCESS) ==========');
+  } catch (error) {
+    sendLog('ERROR', `generateTestMap ERROR: ${error.message}`, error.stack);
+    self.postMessage({
+      type: 'ERROR',
+      code: 'MAP_GENERATION_ERROR',
+      message: `テストマップ生成エラー: ${error.message}`
+    });
+  }
 }
 
 // ========================================
@@ -250,9 +324,16 @@ function fakeExport() {
   self.postMessage({ type: 'EXPORT_DONE', files: { pgm: pgmBlob, yaml: yamlBlob } });
 }
 
-function estimateMemoryMB() {
-  if (self.performance && self.performance.memory) {
-    return self.performance.memory.usedJSHeapSize / (1024 * 1024);
-  }
-  return 0;
+// ========================================
+// Worker Ready Signal
+// ========================================
+console.log('[worker] Sending ready signal...');
+try {
+  self.postMessage({
+    type: 'STATS',
+    stats: { fps: 0, wasmMs: 0, memMB: estimateMemoryMB() }
+  });
+  console.log('[worker] Ready signal sent successfully');
+} catch (error) {
+  console.error('[worker] Failed to send ready signal:', error);
 }

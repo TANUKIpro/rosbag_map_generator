@@ -386,6 +386,11 @@ canvas {
   border-left-color: #E91E63;
 }
 
+.debug-message.type-error {
+  border-left-color: #F44336;
+  background: rgba(255, 0, 0, 0.1);
+}
+
 .debug-message .timestamp {
   color: #888;
   margin-right: 0.5rem;

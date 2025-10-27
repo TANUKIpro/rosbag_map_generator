@@ -6,6 +6,12 @@ export function createWorkerBridge(handlers, debugPanel = null) {
     console.log('[bridge] Received from worker:', type, event.data);
 
     switch (type) {
+      case 'DEBUG_LOG':
+        // Forward worker logs to debug panel
+        if (debugPanel) {
+          debugPanel.logMessage('WORKER', `${event.data.level}: ${event.data.message}`, event.data.level.toLowerCase());
+        }
+        break;
       case 'POSE':
         console.log('[bridge] Processing POSE:', event.data.pose);
         handlers.onPose?.(event.data.pose, event.data.stamp);

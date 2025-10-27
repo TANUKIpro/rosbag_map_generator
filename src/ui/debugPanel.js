@@ -14,6 +14,7 @@ export class DebugPanel {
     this.toggleBtn = document.getElementById('debug-toggle');
     this.clearBtn = document.getElementById('debug-clear');
     this.messagesContainer = document.getElementById('debug-messages');
+    this.workerLogsContainer = document.getElementById('debug-worker-logs');
 
     // 状態表示要素
     this.fileEl = document.getElementById('debug-file');
@@ -25,6 +26,7 @@ export class DebugPanel {
 
     // 状態
     this.messages = [];
+    this.workerLogs = [];
     this.frameCount = 0;
     this.isMinimized = false;
 
@@ -47,7 +49,9 @@ export class DebugPanel {
    */
   clear() {
     this.messages = [];
+    this.workerLogs = [];
     this.messagesContainer.innerHTML = '<div style="color: #888; text-align: center; padding: 1rem;">メッセージ履歴がクリアされました</div>';
+    this.workerLogsContainer.innerHTML = '<div style="color: #888; text-align: center; padding: 1rem;">Worker内部ログがクリアされました</div>';
   }
 
   /**
@@ -151,14 +155,20 @@ export class DebugPanel {
       level
     };
 
-    this.messages.unshift(message);
-
-    // 最大件数を超えたら古いメッセージを削除
-    if (this.messages.length > MAX_MESSAGES) {
-      this.messages = this.messages.slice(0, MAX_MESSAGES);
+    // Worker logsは別のリストに
+    if (source === 'WORKER') {
+      this.workerLogs.unshift(message);
+      if (this.workerLogs.length > 20) {
+        this.workerLogs = this.workerLogs.slice(0, 20);
+      }
+      this.renderWorkerLogs();
+    } else {
+      this.messages.unshift(message);
+      if (this.messages.length > MAX_MESSAGES) {
+        this.messages = this.messages.slice(0, MAX_MESSAGES);
+      }
+      this.renderMessages();
     }
-
-    this.renderMessages();
   }
 
   /**
@@ -186,5 +196,31 @@ export class DebugPanel {
 
     // 自動スクロール
     this.messagesContainer.scrollTop = 0;
+  }
+
+  /**
+   * Worker内部ログを再描画
+   */
+  renderWorkerLogs() {
+    if (this.workerLogs.length === 0) {
+      this.workerLogsContainer.innerHTML = '<div style="color: #888; text-align: center; padding: 1rem;">Workerログがまだありません</div>';
+      return;
+    }
+
+    // 最新5件のみ表示
+    const recentLogs = this.workerLogs.slice(0, 5);
+
+    this.workerLogsContainer.innerHTML = recentLogs.map(log => {
+      const levelClass = log.level === 'error' ? 'type-error' : 'type-worker';
+      return `
+        <div class="debug-message ${levelClass}">
+          <span class="timestamp">${log.timestamp}</span>
+          <span class="text">${log.text}</span>
+        </div>
+      `;
+    }).join('');
+
+    // 自動スクロール
+    this.workerLogsContainer.scrollTop = 0;
   }
 }
