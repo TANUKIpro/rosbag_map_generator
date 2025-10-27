@@ -354,32 +354,51 @@ export async function extractMessages(file, topicName) {
       return [];
     }
 
-    // ステップ2: CHUNKからメッセージデータを抽出
+    // ステップ2: ファイル全体をスキャンしてCHUNKを見つけ、メッセージを抽出
     const messages = [];
     offset = header.nextOffset;
 
+    console.log('[rosbagParser] Scanning file for CHUNK records...');
+    let chunkCount = 0;
+
     while (offset < arrayBuffer.byteLength) {
       try {
-        const record = readRecord(dataView, offset);
-        if (!record) break;
+        // レコードヘッダー長を読み取る
+        if (offset + 4 > arrayBuffer.byteLength) break;
+        const headerLen = dataView.getUint32(offset, true);
 
-        const op = record.header.fields.get('op')?.[0];
+        if (headerLen === 0 || headerLen > 1024 * 1024) {
+          console.warn('[rosbagParser] Invalid header length at offset', offset);
+          break;
+        }
+
+        if (offset + 4 + headerLen + 4 > arrayBuffer.byteLength) break;
+
+        // ヘッダーを読み取る
+        const headerFields = readHeaderFields(dataView, offset + 4, headerLen);
+        const op = headerFields.fields.get('op')?.[0];
 
         // CHUNK レコード (op=0x05)
         if (op === 0x05) {
+          chunkCount++;
+          console.log('[rosbagParser] Found CHUNK at offset', offset);
+
           // CHUNKのデータ部分を解析
           const chunkMessages = extractMessagesFromChunk(dataView, offset, targetConnId);
+          console.log('[rosbagParser] Extracted', chunkMessages.length, 'messages from chunk', chunkCount);
           messages.push(...chunkMessages);
         }
 
-        offset = record.nextOffset;
+        // 次のレコードへ
+        const dataLen = dataView.getUint32(offset + 4 + headerLen, true);
+        offset += 4 + headerLen + 4 + dataLen;
       } catch (e) {
-        console.warn('[rosbagParser] Error reading chunk at offset', offset, ':', e.message);
+        console.warn('[rosbagParser] Error reading record at offset', offset, ':', e.message);
         break;
       }
     }
 
-    console.log('[rosbagParser] Extracted', messages.length, 'messages from topic:', topicName);
+    console.log('[rosbagParser] Scanned', chunkCount, 'chunks, extracted', messages.length, 'messages from topic:', topicName);
     return messages;
   } catch (error) {
     console.error('[rosbagParser] Error extracting messages:', error);
@@ -491,18 +510,22 @@ function extractMessagesFromChunk(dataView, chunkOffset, targetConnId) {
     const dataLen = dataView.getUint32(dataLenOffset, true);
     const dataOffset = dataLenOffset + 4;
 
+    console.log('[extractMessagesFromChunk] Chunk at offset', chunkOffset, 'data length:', dataLen);
+
     // 圧縮フィールドをチェック
     const compression = headerFields.fields.get('compression');
     const compressionStr = compression ? new TextDecoder().decode(compression) : 'none';
 
     if (compressionStr !== 'none') {
-      console.warn('[rosbagParser] Compressed chunks not yet supported:', compressionStr);
+      console.warn('[extractMessagesFromChunk] Compressed chunks not yet supported:', compressionStr);
       return messages;
     }
 
     // CHUNKデータ内のメッセージレコードを読み取る
     let offset = dataOffset;
     const chunkEnd = dataOffset + dataLen;
+    let messageCount = 0;
+    let matchedCount = 0;
 
     while (offset < chunkEnd && offset < dataView.byteLength) {
       try {
@@ -528,11 +551,13 @@ function extractMessagesFromChunk(dataView, chunkOffset, targetConnId) {
 
         // MESSAGE_DATA レコード (op=0x02)
         if (op === 0x02) {
+          messageCount++;
           const conn = msgHeader.fields.get('conn');
           if (conn) {
             const connId = new DataView(conn.buffer, conn.byteOffset, conn.byteLength).getUint32(0, true);
 
             if (connId === targetConnId) {
+              matchedCount++;
               // メッセージデータを抽出
               const messageData = new Uint8Array(dataView.buffer, offset, msgDataLen);
 
@@ -556,12 +581,14 @@ function extractMessagesFromChunk(dataView, chunkOffset, targetConnId) {
 
         offset += msgDataLen;
       } catch (e) {
-        console.warn('[rosbagParser] Error reading message in chunk:', e.message);
+        console.warn('[extractMessagesFromChunk] Error reading message in chunk:', e.message);
         break;
       }
     }
+
+    console.log('[extractMessagesFromChunk] Found', messageCount, 'total messages,', matchedCount, 'matched target connection');
   } catch (e) {
-    console.warn('[rosbagParser] Error extracting from chunk:', e.message);
+    console.warn('[extractMessagesFromChunk] Error extracting from chunk:', e.message);
   }
 
   return messages;
