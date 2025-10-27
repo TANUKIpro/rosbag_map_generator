@@ -44,6 +44,9 @@ let topics = { scan: '/scan', odom: '/odom', tf: '/tf' };
 let config = { resolution: 0.05, width: 2000, height: 2000, downsample: 1 };
 let isPlaying = false;
 let playbackSpeed = 1.0;
+let scanMessages = [];
+let currentMessageIndex = 0;
+let playbackTimer = null;
 
 self.addEventListener('message', async event => {
   const { type } = event.data;
@@ -168,7 +171,12 @@ async function handleSetTopics(data) {
       sendLog('INFO', `Extracted ${messages.length} messages from ${topics.scan}`);
 
       if (messages.length > 0) {
-        sendLog('INFO', 'Generating map from LaserScan data...');
+        // Store messages for playback
+        scanMessages = messages;
+        currentMessageIndex = 0;
+        sendLog('INFO', `Stored ${scanMessages.length} messages for playback`);
+
+        sendLog('INFO', 'Generating initial map from LaserScan data...');
         await generateMapFromLaserScans(messages);
         sendLog('INFO', 'Map generation completed successfully');
       } else {
@@ -210,27 +218,219 @@ function handleConfig(newConfig) {
 // ========================================
 function handlePlay(speed) {
   console.log('[worker] Play requested, speed:', speed);
-  sendLog('INFO', `Playback started at ${speed}x speed`);
-  isPlaying = true;
-  playbackSpeed = speed || playbackSpeed;
 
-  // TODO: Implement actual playback of rosbag messages
-  sendLog('WARN', 'Playback feature is not yet implemented');
+  if (scanMessages.length === 0) {
+    sendLog('WARN', 'No messages available for playback. Please load a file and select topics first.');
+    return;
+  }
+
+  playbackSpeed = speed || playbackSpeed;
+  isPlaying = true;
+  sendLog('INFO', `Playback started at ${playbackSpeed}x speed`);
+
+  // Start playback loop
+  startPlaybackLoop();
 }
 
 function handlePause() {
   console.log('[worker] Pause requested');
+  sendLog('INFO', 'Playback paused');
   isPlaying = false;
+
+  // Clear timer if running
+  if (playbackTimer !== null) {
+    clearTimeout(playbackTimer);
+    playbackTimer = null;
+  }
 }
 
 function handleStop() {
   console.log('[worker] Stop requested');
+  sendLog('INFO', 'Playback stopped');
   isPlaying = false;
+  currentMessageIndex = 0;
+
+  // Clear timer if running
+  if (playbackTimer !== null) {
+    clearTimeout(playbackTimer);
+    playbackTimer = null;
+  }
+
+  // Reset to initial state - regenerate full map
+  if (scanMessages.length > 0) {
+    generateMapFromLaserScans(scanMessages);
+  }
 }
 
 function handleSetSpeed(speed) {
   console.log('[worker] Speed change:', speed);
   playbackSpeed = speed;
+  sendLog('INFO', `Playback speed changed to ${speed}x`);
+}
+
+// ========================================
+// Playback Loop
+// ========================================
+async function startPlaybackLoop() {
+  if (!isPlaying || scanMessages.length === 0) {
+    return;
+  }
+
+  try {
+    await renderFrameAtIndex(currentMessageIndex);
+
+    // Move to next message
+    currentMessageIndex++;
+
+    // Check if we've reached the end
+    if (currentMessageIndex >= scanMessages.length) {
+      sendLog('INFO', 'Playback completed - reached end of messages');
+      handleStop();
+      return;
+    }
+
+    // Calculate delay until next frame
+    if (isPlaying && currentMessageIndex < scanMessages.length) {
+      const currentMsg = scanMessages[currentMessageIndex - 1];
+      const nextMsg = scanMessages[currentMessageIndex];
+
+      // Calculate time difference in milliseconds
+      const timeDiff = (nextMsg.timestamp - currentMsg.timestamp) / 1000000; // nanoseconds to milliseconds
+
+      // Adjust for playback speed
+      const delay = Math.max(1, timeDiff / playbackSpeed);
+
+      // Schedule next frame
+      playbackTimer = setTimeout(() => {
+        startPlaybackLoop();
+      }, delay);
+    }
+  } catch (error) {
+    sendLog('ERROR', `Error during playback: ${error.message}`, error.stack);
+    handleStop();
+  }
+}
+
+async function renderFrameAtIndex(index) {
+  if (index < 0 || index >= scanMessages.length) {
+    return;
+  }
+
+  const startTime = performance.now();
+
+  // Get messages up to current index for progressive map building
+  const messagesToRender = scanMessages.slice(0, index + 1);
+
+  // Map configuration
+  const resolution = config.resolution;
+  const mapWidth = config.width;
+  const mapHeight = config.height;
+
+  // Create occupancy grid
+  const grid = new Uint8Array(mapWidth * mapHeight);
+  grid.fill(128); // Initialize as free space
+
+  // Robot starts at center of map
+  const robotX = mapWidth / 2;
+  const robotY = mapHeight / 2;
+
+  // Process messages to build progressive map
+  for (const msg of messagesToRender) {
+    try {
+      const scan = decodeLaserScan(msg.data);
+
+      // Convert scan points to grid coordinates
+      for (let i = 0; i < scan.ranges.length; i++) {
+        const range = scan.ranges[i];
+
+        if (range < scan.range_min || range > scan.range_max || isNaN(range) || !isFinite(range)) {
+          continue;
+        }
+
+        const angle = scan.angle_min + i * scan.angle_increment;
+        const x = range * Math.cos(angle);
+        const y = range * Math.sin(angle);
+
+        const gridX = Math.floor(robotX + x / resolution);
+        const gridY = Math.floor(robotY - y / resolution);
+
+        if (gridX >= 0 && gridX < mapWidth && gridY >= 0 && gridY < mapHeight) {
+          const gridIndex = gridY * mapWidth + gridX;
+          grid[gridIndex] = 0; // Mark as occupied
+        }
+      }
+    } catch (e) {
+      console.warn('[worker] Error processing scan in playback:', e);
+    }
+  }
+
+  // Create canvas and draw map
+  const canvas = new OffscreenCanvas(mapWidth, mapHeight);
+  const ctx = canvas.getContext('2d');
+
+  // Create ImageData from grid
+  const imageData = ctx.createImageData(mapWidth, mapHeight);
+  for (let i = 0; i < grid.length; i++) {
+    const value = grid[i];
+    let rgb;
+    if (value === 0) {
+      rgb = 0; // Black for occupied
+    } else if (value === 128) {
+      rgb = 255; // White for free space
+    } else {
+      rgb = 200; // Light gray for unknown
+    }
+
+    const pixelIndex = i * 4;
+    imageData.data[pixelIndex] = rgb;
+    imageData.data[pixelIndex + 1] = rgb;
+    imageData.data[pixelIndex + 2] = rgb;
+    imageData.data[pixelIndex + 3] = 255;
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+
+  // Draw robot position
+  ctx.fillStyle = '#FF0000';
+  ctx.beginPath();
+  ctx.arc(robotX, robotY, 5, 0, 2 * Math.PI);
+  ctx.fill();
+
+  // Convert to ImageBitmap
+  const imageBitmap = canvas.transferToImageBitmap();
+
+  const currentMsg = scanMessages[index];
+  const stamp = currentMsg.timestamp;
+
+  // Send frame to UI
+  self.postMessage({
+    type: 'GRID_FRAME',
+    imageBitmap: imageBitmap,
+    stamp: stamp
+  }, [imageBitmap]);
+
+  // Send pose update
+  self.postMessage({
+    type: 'POSE',
+    pose: { x: robotX, y: robotY, theta: 0 },
+    stamp: stamp
+  });
+
+  // Calculate and send stats
+  const endTime = performance.now();
+  const renderTime = endTime - startTime;
+  const fps = 1000 / renderTime;
+
+  self.postMessage({
+    type: 'STATS',
+    stats: {
+      fps: Math.round(fps),
+      wasmMs: renderTime.toFixed(2),
+      memMB: estimateMemoryMB(),
+      currentFrame: index + 1,
+      totalFrames: scanMessages.length
+    }
+  });
 }
 
 // ========================================

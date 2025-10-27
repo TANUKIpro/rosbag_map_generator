@@ -246,6 +246,11 @@ appState.on('stats', stats => {
   document.getElementById('fps').textContent = stats.fps.toFixed(1);
   document.getElementById('wasm-time').textContent = `${stats.wasmMs.toFixed(1)} ms`;
   document.getElementById('memory').textContent = `${stats.memMB.toFixed(0)} MB`;
+
+  // フレーム情報の更新（再生中のみ）
+  if (stats.currentFrame !== undefined && stats.totalFrames !== undefined) {
+    document.getElementById('frame-info').textContent = `${stats.currentFrame}/${stats.totalFrames}`;
+  }
 });
 
 // タイムスタンプの更新 - ロボットの現在位置の時刻
