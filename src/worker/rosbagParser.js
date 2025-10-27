@@ -93,7 +93,59 @@ export async function parseRosbagTopics(file) {
     const topics = new Map(); // topic_name -> {type, messageCount}
     let totalRecordCount = 0; // 処理したレコード数の合計
 
-    // インデックスセクションからCONNECTIONレコードを読み取る
+    // ステップ1: ファイルの先頭部分からCONNECTIONレコードを読み取る
+    // CONNECTIONレコードは通常CHUNKの直前に配置される
+    console.log('[rosbagParser] Scanning for CONNECTION records from file start...');
+    {
+      let offset = header.nextOffset;
+      let recordCount = 0;
+      const maxRecords = 100; // 最初の100レコードをスキャン
+
+      while (offset < arrayBuffer.byteLength && recordCount < maxRecords) {
+        try {
+          const record = readRecord(dataView, offset);
+          if (!record) break;
+
+          const op = record.header.fields.get('op')?.[0];
+
+          // CONNECTION レコード (op=0x07) を探す
+          if (op === 0x07) {
+            const conn = record.header.fields.get('conn');
+            const topic = record.header.fields.get('topic');
+            const type = record.header.fields.get('type');
+
+            if (conn && topic && type) {
+              const connId = new DataView(conn.buffer, conn.byteOffset, conn.byteLength).getUint32(0, true);
+              const topicStr = new TextDecoder().decode(topic);
+              const typeStr = new TextDecoder().decode(type);
+
+              connections.set(connId, { topic: topicStr, type: typeStr });
+              if (!topics.has(topicStr)) {
+                topics.set(topicStr, { type: typeStr, messageCount: 0 });
+              }
+
+              console.log('[rosbagParser] Found CONNECTION at start:', connId, topicStr, typeStr);
+            }
+          }
+
+          // CHUNKに到達したら、CONNECTIONレコードは終わり
+          if (op === 0x05) {
+            console.log('[rosbagParser] Reached CHUNK, stopping CONNECTION scan');
+            break;
+          }
+
+          offset = record.nextOffset;
+          recordCount++;
+        } catch (e) {
+          console.warn('[rosbagParser] Error in start scan:', e.message);
+          break;
+        }
+      }
+
+      console.log('[rosbagParser] Start scan complete, found', connections.size, 'connections');
+    }
+
+    // ステップ2: インデックスセクションからCHUNK_INFOとCONNECTIONを読み取る
     if (indexPos !== null && indexPos < arrayBuffer.byteLength) {
       console.log('[rosbagParser] Reading index section at position:', indexPos);
       let offset = indexPos;
@@ -110,6 +162,18 @@ export async function parseRosbagTopics(file) {
           }
 
           const op = record.header.fields.get('op')?.[0];
+
+          // デバッグ: 見つかったopコードをすべてログ
+          const opName = {
+            0x02: 'MESSAGE_DATA',
+            0x03: 'BAG_HEADER',
+            0x04: 'INDEX_DATA',
+            0x05: 'CHUNK',
+            0x06: 'CHUNK_INFO',
+            0x07: 'CONNECTION'
+          }[op] || `UNKNOWN(0x${op?.toString(16)})`;
+
+          console.log(`[rosbagParser] Index record ${recordCount}: op=${opName} (0x${op?.toString(16).padStart(2, '0')}), offset=${offset}`);
 
           // Connection レコード (op=0x07)
           if (op === 0x07) {
