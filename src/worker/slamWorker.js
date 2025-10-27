@@ -338,7 +338,7 @@ async function renderFrameAtIndex(index) {
 
   // Create occupancy grid
   const grid = new Uint8Array(mapWidth * mapHeight);
-  grid.fill(128); // Initialize as free space
+  grid.fill(200); // Initialize as unknown (dark gray)
 
   // Robot starts at center of map
   const robotX = mapWidth / 2;
@@ -366,7 +366,7 @@ async function renderFrameAtIndex(index) {
 
         if (gridX >= 0 && gridX < mapWidth && gridY >= 0 && gridY < mapHeight) {
           const gridIndex = gridY * mapWidth + gridX;
-          grid[gridIndex] = 0; // Mark as occupied
+          grid[gridIndex] = 0; // Mark as occupied (will be shown as red)
         }
       }
     } catch (e) {
@@ -382,28 +382,37 @@ async function renderFrameAtIndex(index) {
   const imageData = ctx.createImageData(mapWidth, mapHeight);
   for (let i = 0; i < grid.length; i++) {
     const value = grid[i];
-    let rgb;
+    let r, g, b;
     if (value === 0) {
-      rgb = 0; // Black for occupied
+      // Occupied (obstacle) - RED for visibility
+      r = 255;
+      g = 0;
+      b = 0;
     } else if (value === 128) {
-      rgb = 255; // White for free space
+      // Free space - WHITE
+      r = 255;
+      g = 255;
+      b = 255;
     } else {
-      rgb = 200; // Light gray for unknown
+      // Unknown - DARK GRAY
+      r = 50;
+      g = 50;
+      b = 50;
     }
 
     const pixelIndex = i * 4;
-    imageData.data[pixelIndex] = rgb;
-    imageData.data[pixelIndex + 1] = rgb;
-    imageData.data[pixelIndex + 2] = rgb;
-    imageData.data[pixelIndex + 3] = 255;
+    imageData.data[pixelIndex] = r;     // R
+    imageData.data[pixelIndex + 1] = g; // G
+    imageData.data[pixelIndex + 2] = b; // B
+    imageData.data[pixelIndex + 3] = 255; // A
   }
 
   ctx.putImageData(imageData, 0, 0);
 
-  // Draw robot position
-  ctx.fillStyle = '#FF0000';
+  // Draw robot position (YELLOW to distinguish from obstacles)
+  ctx.fillStyle = '#FFFF00';
   ctx.beginPath();
-  ctx.arc(robotX, robotY, 5, 0, 2 * Math.PI);
+  ctx.arc(robotX, robotY, 10, 0, 2 * Math.PI);
   ctx.fill();
 
   // Convert to ImageBitmap
@@ -457,9 +466,9 @@ async function generateMapFromLaserScans(messages) {
 
     sendLog('INFO', `Map config: ${mapWidth}x${mapHeight}, resolution: ${resolution}m/pixel`);
 
-    // Create occupancy grid (0=unknown, 128=free, 255=occupied)
+    // Create occupancy grid (0=occupied/obstacle, 128=free, 200=unknown)
     const grid = new Uint8Array(mapWidth * mapHeight);
-    grid.fill(128); // Initialize as free space
+    grid.fill(200); // Initialize as unknown (dark gray)
 
     // Robot starts at center of map
     const robotX = mapWidth / 2;
@@ -497,7 +506,7 @@ async function generateMapFromLaserScans(messages) {
           // Mark as occupied if within bounds
           if (gridX >= 0 && gridX < mapWidth && gridY >= 0 && gridY < mapHeight) {
             const index = gridY * mapWidth + gridX;
-            grid[index] = 0; // Mark as occupied (black)
+            grid[index] = 0; // Mark as occupied (will be shown as red)
           }
         }
 
@@ -524,29 +533,37 @@ async function generateMapFromLaserScans(messages) {
     for (let i = 0; i < grid.length; i++) {
       const value = grid[i];
       // Convert occupancy values to RGB
-      // 0 = occupied (black), 128 = free (white), 255 = unknown (gray)
-      let rgb;
+      let r, g, b;
       if (value === 0) {
-        rgb = 0; // Black for occupied
+        // Occupied (obstacle) - RED for visibility
+        r = 255;
+        g = 0;
+        b = 0;
       } else if (value === 128) {
-        rgb = 255; // White for free space
+        // Free space - WHITE
+        r = 255;
+        g = 255;
+        b = 255;
       } else {
-        rgb = 200; // Light gray for unknown
+        // Unknown - DARK GRAY
+        r = 50;
+        g = 50;
+        b = 50;
       }
 
       const pixelIndex = i * 4;
-      imageData.data[pixelIndex] = rgb;     // R
-      imageData.data[pixelIndex + 1] = rgb; // G
-      imageData.data[pixelIndex + 2] = rgb; // B
+      imageData.data[pixelIndex] = r;     // R
+      imageData.data[pixelIndex + 1] = g; // G
+      imageData.data[pixelIndex + 2] = b; // B
       imageData.data[pixelIndex + 3] = 255; // A
     }
 
     ctx.putImageData(imageData, 0, 0);
 
-    // Draw robot position
-    ctx.fillStyle = '#FF0000';
+    // Draw robot position (YELLOW to distinguish from obstacles)
+    ctx.fillStyle = '#FFFF00';
     ctx.beginPath();
-    ctx.arc(robotX, robotY, 5, 0, 2 * Math.PI);
+    ctx.arc(robotX, robotY, 10, 0, 2 * Math.PI);
     ctx.fill();
 
     sendLog('INFO', 'Converting canvas to ImageBitmap...');
