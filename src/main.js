@@ -32,6 +32,12 @@ debugPanel.logMessage('UI', 'アプリケーション初期化開始');
 
 /** Web Workerブリッジ - バックグラウンド処理との通信 */
 const workerBridge = createWorkerBridge({
+  onTopicsAvailable: (topics) => {
+    console.log('[main] Topics available:', topics);
+    debugPanel.recordAvailableTopics(topics);
+    appState.setAvailableTopics(topics);
+    toast.show(`${topics.length}個のトピックを検出しました`, 'success');
+  },
   onPose: (pose, stamp) => {
     debugPanel.recordWorkerMessage('POSE', { pose, stamp });
     appState.updatePose(stamp, pose);

@@ -1,4 +1,9 @@
 // ========================================
+// Imports
+// ========================================
+import { parseRosbagTopics } from './rosbagParser.js';
+
+// ========================================
 // Utility Functions (defined first)
 // ========================================
 function estimateMemoryMB() {
@@ -108,6 +113,23 @@ async function handleOpenFile(file) {
     // Send initial stats
     sendLog('INFO', 'Sending initial STATS message');
     self.postMessage({ type: 'STATS', stats: { fps: 0, wasmMs: 0, memMB: estimateMemoryMB() } });
+
+    // Parse rosbag file to extract topics
+    sendLog('INFO', 'Parsing rosbag file to extract topics...');
+    const topics = await parseRosbagTopics(file);
+    sendLog('INFO', `Found ${topics.length} topics in rosbag file`);
+
+    // Send topics to UI
+    self.postMessage({
+      type: 'TOPICS_AVAILABLE',
+      topics: topics
+    });
+    sendLog('INFO', 'Topics sent to UI');
+
+    // Log each topic
+    topics.forEach(topic => {
+      sendLog('INFO', `  - ${topic.name} (${topic.type}) - ${topic.messageCount} messages`);
+    });
 
     // Generate a test map to verify the pipeline
     sendLog('INFO', 'Calling generateTestMap()');

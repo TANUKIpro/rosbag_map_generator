@@ -73,6 +73,16 @@ export class DebugPanel {
   }
 
   /**
+   * 利用可能なトピック一覧を記録
+   */
+  recordAvailableTopics(topics) {
+    this.logMessage('UI', `検出されたトピック: ${topics.length}個`);
+    topics.forEach(topic => {
+      this.logMessage('UI', `  ${topic.name} (${topic.type}) - ${topic.messageCount} msgs`);
+    });
+  }
+
+  /**
    * GRID_FRAMEの受信を記録
    */
   recordGridFrame(imageBitmap) {

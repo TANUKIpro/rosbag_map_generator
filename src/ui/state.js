@@ -70,6 +70,9 @@ export class AppState extends Emitter {
     /** @type {File|null} 読み込まれたROSバッグファイル */
     this.file = null;
 
+    /** @type {Array} 利用可能なトピック一覧 */
+    this.availableTopics = [];
+
     /** @type {{scan: string|null, odom: string|null, tf: string|null}} トピック設定 */
     this.topics = { scan: null, odom: null, tf: null };
 
@@ -88,6 +91,16 @@ export class AppState extends Emitter {
   setFile(file) {
     this.file = file;
     this.emit('file', { file });
+  }
+
+  /**
+   * 利用可能なトピック一覧を設定し、'availableTopics'イベントを発火
+   *
+   * @param {Array} topics - トピック一覧 [{name, type, messageCount}]
+   */
+  setAvailableTopics(topics) {
+    this.availableTopics = topics;
+    this.emit('availableTopics', { topics });
   }
 
   /**

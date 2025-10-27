@@ -26,6 +26,10 @@ export function createWorkerBridge(handlers, debugPanel = null) {
           debugPanel.logMessage('WORKER', `${event.data.level}: ${event.data.message}`, event.data.level.toLowerCase());
         }
         break;
+      case 'TOPICS_AVAILABLE':
+        console.log('[bridge] Processing TOPICS_AVAILABLE:', event.data.topics);
+        handlers.onTopicsAvailable?.(event.data.topics);
+        break;
       case 'POSE':
         console.log('[bridge] Processing POSE:', event.data.pose);
         handlers.onPose?.(event.data.pose, event.data.stamp);
