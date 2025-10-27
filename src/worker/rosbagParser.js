@@ -298,42 +298,53 @@ export async function extractMessages(file, topicName) {
     // ヘッダーを読み取る
     const header = readHeader(dataView, 13);
 
-    // ステップ1: CONNECTION情報を収集
+    // index_pos を取得
+    const indexPosField = header.fields.get('index_pos');
+    let indexPos = null;
+    if (indexPosField && indexPosField.length >= 8) {
+      const indexPosView = new DataView(indexPosField.buffer, indexPosField.byteOffset, indexPosField.byteLength);
+      indexPos = Number(indexPosView.getBigUint64(0, true));
+      console.log('[rosbagParser] Index section position:', indexPos);
+    }
+
+    // ステップ1: INDEX sectionからCONNECTION情報を収集
     const connections = new Map(); // connection_id -> {topic, type}
-    let offset = header.nextOffset;
 
-    // ファイルの先頭部分からCONNECTIONレコードを読み取る
-    while (offset < arrayBuffer.byteLength) {
-      try {
-        const record = readRecord(dataView, offset);
-        if (!record) break;
+    if (indexPos !== null && indexPos < arrayBuffer.byteLength) {
+      console.log('[rosbagParser] Reading connections from index section...');
+      let offset = indexPos;
+      let recordCount = 0;
+      const maxRecords = 1000;
 
-        const op = record.header.fields.get('op')?.[0];
+      while (offset < arrayBuffer.byteLength && recordCount < maxRecords) {
+        try {
+          const record = readRecord(dataView, offset);
+          if (!record) break;
 
-        // CONNECTION レコード
-        if (op === 0x07) {
-          const conn = record.header.fields.get('conn');
-          const topic = record.header.fields.get('topic');
-          const type = record.header.fields.get('type');
+          const op = record.header.fields.get('op')?.[0];
 
-          if (conn && topic && type) {
-            const connId = new DataView(conn.buffer, conn.byteOffset, conn.byteLength).getUint32(0, true);
-            const topicStr = new TextDecoder().decode(topic);
-            const typeStr = new TextDecoder().decode(type);
+          // CONNECTION レコード (op=0x07)
+          if (op === 0x07) {
+            const conn = record.header.fields.get('conn');
+            const topic = record.header.fields.get('topic');
+            const type = record.header.fields.get('type');
 
-            connections.set(connId, { topic: topicStr, type: typeStr });
+            if (conn && topic && type) {
+              const connId = new DataView(conn.buffer, conn.byteOffset, conn.byteLength).getUint32(0, true);
+              const topicStr = new TextDecoder().decode(topic);
+              const typeStr = new TextDecoder().decode(type);
+
+              connections.set(connId, { topic: topicStr, type: typeStr });
+              console.log('[rosbagParser] Found connection:', connId, topicStr, typeStr);
+            }
           }
-        }
 
-        // CHUNKに到達したらCONNECTIONは終わり
-        if (op === 0x05) {
+          offset = record.nextOffset;
+          recordCount++;
+        } catch (e) {
+          console.warn('[rosbagParser] Error reading connection from index:', e.message);
           break;
         }
-
-        offset = record.nextOffset;
-      } catch (e) {
-        console.warn('[rosbagParser] Error reading connection:', e.message);
-        break;
       }
     }
 
@@ -356,12 +367,15 @@ export async function extractMessages(file, topicName) {
 
     // ステップ2: ファイル全体をスキャンしてCHUNKを見つけ、メッセージを抽出
     const messages = [];
-    offset = header.nextOffset;
+    let offset = header.nextOffset;
 
-    console.log('[rosbagParser] Scanning file for CHUNK records...');
+    // INDEX sectionの前まで（CHUNKはINDEX sectionより前にある）
+    const scanEnd = indexPos !== null ? indexPos : arrayBuffer.byteLength;
+
+    console.log('[rosbagParser] Scanning file for CHUNK records from offset', offset, 'to', scanEnd);
     let chunkCount = 0;
 
-    while (offset < arrayBuffer.byteLength) {
+    while (offset < scanEnd) {
       try {
         // レコードヘッダー長を読み取る
         if (offset + 4 > arrayBuffer.byteLength) break;
