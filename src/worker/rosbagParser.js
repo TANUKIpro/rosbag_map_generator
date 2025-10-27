@@ -435,7 +435,24 @@ function readRecord(dataView, offset) {
     return null;
   }
 
-  // データ部分はスキップ（トピック抽出には不要）
+  // CONNECTIONレコード（op=0x07）の場合、データ部分も解析
+  // CONNECTION recordのデータ部分にはtype, md5sum, message_definitionなどが含まれる
+  const op = header.fields.get('op')?.[0];
+  if (op === 0x07 && dataLen > 0) {
+    try {
+      const dataFields = readHeaderFields(dataView, offset, dataLen);
+      // データ部分のフィールドをヘッダーにマージ
+      for (const [key, value] of dataFields.fields.entries()) {
+        if (!header.fields.has(key)) {
+          header.fields.set(key, value);
+        }
+      }
+    } catch (e) {
+      console.warn('[readRecord] Error parsing CONNECTION data section:', e.message);
+    }
+  }
+
+  // データ部分をスキップ
   offset += dataLen;
 
   return {
