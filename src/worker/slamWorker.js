@@ -41,7 +41,10 @@ sendLog('INFO', 'Worker initialized and ready');
 
 let currentFile = null;
 let topics = { scan: '/scan', odom: '/odom', tf: '/tf' };
-let config = { resolution: 0.05, width: 2000, height: 2000, downsample: 1 };
+// Fixed config values for optimal map generation
+// resolution: 0.05 m/pixel (5cm per pixel)
+// Map size: 1000x1000 pixels = 50m x 50m physical size
+let config = { resolution: 0.05, width: 1000, height: 1000 };
 let isPlaying = false;
 let playbackSpeed = 1.0;
 let scanMessages = [];
@@ -62,7 +65,8 @@ self.addEventListener('message', async event => {
       handleSetTopics(event.data);
       break;
     case 'CONFIG':
-      handleConfig(event.data.config);
+      // Config changes disabled - using fixed values
+      console.log('[worker] CONFIG message ignored - using fixed config values');
       break;
     case 'PLAY':
       handlePlay(event.data.speed);
