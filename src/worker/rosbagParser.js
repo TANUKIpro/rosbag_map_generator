@@ -307,9 +307,54 @@ export async function extractMessages(file, topicName) {
       console.log('[rosbagParser] Index section position:', indexPos);
     }
 
-    // ステップ1: INDEX sectionからCONNECTION情報を収集
+    // ステップ1: CONNECTION情報を収集
     const connections = new Map(); // connection_id -> {topic, type}
 
+    // まず、ファイルの先頭部分からCONNECTIONを読み取る（CHUNKの直前にある）
+    console.log('[rosbagParser] Reading connections from file header...');
+    {
+      let offset = header.nextOffset;
+      let recordCount = 0;
+      const maxRecords = 100; // 最初の100レコードをスキャン
+
+      while (offset < arrayBuffer.byteLength && recordCount < maxRecords) {
+        try {
+          const record = readRecord(dataView, offset);
+          if (!record) break;
+
+          const op = record.header.fields.get('op')?.[0];
+
+          // CONNECTION レコード (op=0x07)
+          if (op === 0x07) {
+            const conn = record.header.fields.get('conn');
+            const topic = record.header.fields.get('topic');
+            const type = record.header.fields.get('type');
+
+            if (conn && topic && type) {
+              const connId = new DataView(conn.buffer, conn.byteOffset, conn.byteLength).getUint32(0, true);
+              const topicStr = new TextDecoder().decode(topic);
+              const typeStr = new TextDecoder().decode(type);
+
+              connections.set(connId, { topic: topicStr, type: typeStr });
+              console.log('[rosbagParser] Found connection in header:', connId, topicStr, typeStr);
+            }
+          }
+
+          // CHUNKに到達したら、CONNECTIONレコードは終わり
+          if (op === 0x05) {
+            break;
+          }
+
+          offset = record.nextOffset;
+          recordCount++;
+        } catch (e) {
+          console.warn('[rosbagParser] Error in header scan:', e.message);
+          break;
+        }
+      }
+    }
+
+    // 次に、INDEX sectionからもCONNECTION情報を読み取る
     if (indexPos !== null && indexPos < arrayBuffer.byteLength) {
       console.log('[rosbagParser] Reading connections from index section...');
       let offset = indexPos;
@@ -335,7 +380,7 @@ export async function extractMessages(file, topicName) {
               const typeStr = new TextDecoder().decode(type);
 
               connections.set(connId, { topic: topicStr, type: typeStr });
-              console.log('[rosbagParser] Found connection:', connId, topicStr, typeStr);
+              console.log('[rosbagParser] Found connection in index:', connId, topicStr, typeStr);
             }
           }
 

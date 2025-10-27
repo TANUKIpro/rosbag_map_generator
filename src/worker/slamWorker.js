@@ -116,45 +116,22 @@ async function handleOpenFile(file) {
 
     // Parse rosbag file to extract topics
     sendLog('INFO', 'Parsing rosbag file to extract topics...');
-    const topics = await parseRosbagTopics(file);
-    sendLog('INFO', `Found ${topics.length} topics in rosbag file`);
+    const availableTopics = await parseRosbagTopics(file);
+    sendLog('INFO', `Found ${availableTopics.length} topics in rosbag file`);
 
     // Send topics to UI
     self.postMessage({
       type: 'TOPICS_AVAILABLE',
-      topics: topics
+      topics: availableTopics
     });
     sendLog('INFO', 'Topics sent to UI');
 
     // Log each topic
-    topics.forEach(topic => {
+    availableTopics.forEach(topic => {
       sendLog('INFO', `  - ${topic.name} (${topic.type}) - ${topic.messageCount} messages`);
     });
 
-    // Find LaserScan topic
-    const laserScanTopic = topics.find(t => t.type === 'sensor_msgs/LaserScan');
-
-    if (laserScanTopic) {
-      sendLog('INFO', `Found LaserScan topic: ${laserScanTopic.name}`);
-
-      // Extract LaserScan messages
-      sendLog('INFO', 'Extracting LaserScan messages from rosbag...');
-      const messages = await extractMessages(file, laserScanTopic.name);
-      sendLog('INFO', `Extracted ${messages.length} LaserScan messages`);
-
-      if (messages.length > 0) {
-        // Generate map from LaserScan data
-        sendLog('INFO', 'Generating map from LaserScan data...');
-        await generateMapFromLaserScans(messages);
-        sendLog('INFO', 'Map generation completed successfully');
-      } else {
-        sendLog('WARN', 'No LaserScan messages found, generating test map');
-        await generateTestMap();
-      }
-    } else {
-      sendLog('WARN', 'No LaserScan topic found, generating test map');
-      await generateTestMap();
-    }
+    sendLog('INFO', 'File loaded successfully. Waiting for user to select topics...');
   } catch (error) {
     sendLog('ERROR', `Error in handleOpenFile: ${error.message}`, error.stack);
     self.postMessage({
@@ -170,14 +147,56 @@ async function handleOpenFile(file) {
 // ========================================
 // Topic and Config Handling
 // ========================================
-function handleSetTopics(data) {
+async function handleSetTopics(data) {
+  sendLog('INFO', '========== handleSetTopics START ==========');
   console.log('[worker] Setting topics:', data);
+
   topics = {
     scan: data.scan || topics.scan,
     odom: data.odom || topics.odom,
     tf: data.tf || topics.tf
   };
+
+  sendLog('INFO', `Topics updated: scan=${topics.scan}, odom=${topics.odom}, tf=${topics.tf}`);
   console.log('[worker] Topics updated:', topics);
+
+  // Generate map from selected scan topic
+  if (currentFile && topics.scan) {
+    try {
+      sendLog('INFO', `Extracting messages from scan topic: ${topics.scan}`);
+      const messages = await extractMessages(currentFile, topics.scan);
+      sendLog('INFO', `Extracted ${messages.length} messages from ${topics.scan}`);
+
+      if (messages.length > 0) {
+        sendLog('INFO', 'Generating map from LaserScan data...');
+        await generateMapFromLaserScans(messages);
+        sendLog('INFO', 'Map generation completed successfully');
+      } else {
+        sendLog('WARN', 'No messages found in selected scan topic');
+        self.postMessage({
+          type: 'ERROR',
+          code: 'NO_MESSAGES',
+          message: '選択されたスキャントピックにメッセージが見つかりません'
+        });
+      }
+    } catch (error) {
+      sendLog('ERROR', `Error generating map: ${error.message}`, error.stack);
+      self.postMessage({
+        type: 'ERROR',
+        code: 'MAP_GENERATION_ERROR',
+        message: `マップ生成エラー: ${error.message}`
+      });
+    }
+  } else {
+    if (!currentFile) {
+      sendLog('WARN', 'No file loaded');
+    }
+    if (!topics.scan) {
+      sendLog('WARN', 'No scan topic selected');
+    }
+  }
+
+  sendLog('INFO', '========== handleSetTopics END ==========');
 }
 
 function handleConfig(newConfig) {
@@ -191,11 +210,12 @@ function handleConfig(newConfig) {
 // ========================================
 function handlePlay(speed) {
   console.log('[worker] Play requested, speed:', speed);
+  sendLog('INFO', `Playback started at ${speed}x speed`);
   isPlaying = true;
   playbackSpeed = speed || playbackSpeed;
 
-  // Start generating test frames
-  startTestAnimation();
+  // TODO: Implement actual playback of rosbag messages
+  sendLog('WARN', 'Playback feature is not yet implemented');
 }
 
 function handlePause() {
@@ -353,150 +373,6 @@ async function generateMapFromLaserScans(messages) {
       message: `マップ生成エラー: ${error.message}`
     });
   }
-}
-
-// ========================================
-// Test Map Generation
-// ========================================
-async function generateTestMap() {
-  sendLog('INFO', '========== generateTestMap START ==========');
-
-  try {
-    sendLog('INFO', 'Step 1: Setting canvas dimensions (400x400)');
-    const width = 400;
-    const height = 400;
-
-    sendLog('INFO', 'Step 2: Creating OffscreenCanvas');
-    const canvas = new OffscreenCanvas(width, height);
-
-    sendLog('INFO', 'Step 3: Getting 2D context');
-    const ctx = canvas.getContext('2d');
-
-    sendLog('INFO', 'Step 4: Drawing test pattern');
-    // Background (unknown space - gray)
-    ctx.fillStyle = '#808080';
-    ctx.fillRect(0, 0, width, height);
-
-    // Free space (white)
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(50, 50, 300, 300);
-
-    // Obstacles (black)
-    ctx.fillStyle = '#000000';
-    // Border walls
-    ctx.fillRect(50, 50, 300, 10); // top wall
-    ctx.fillRect(50, 340, 300, 10); // bottom wall
-    ctx.fillRect(50, 50, 10, 300); // left wall
-    ctx.fillRect(340, 50, 10, 300); // right wall
-
-    // Some obstacles in the middle
-    ctx.fillRect(150, 150, 50, 50);
-    ctx.fillRect(250, 200, 40, 80);
-
-    // Add text to indicate it's a test map
-    ctx.fillStyle = '#FF0000';
-    ctx.font = 'bold 20px sans-serif';
-    ctx.fillText('TEST MAP', 150, 30);
-
-    sendLog('INFO', 'Step 5: Converting canvas to ImageBitmap');
-    const imageBitmap = canvas.transferToImageBitmap();
-    sendLog('INFO', `ImageBitmap created: ${imageBitmap.width}x${imageBitmap.height}`);
-
-    sendLog('INFO', 'Step 6: Preparing GRID_FRAME message');
-    const stamp = Date.now() * 1000; // Convert to microseconds
-
-    sendLog('INFO', 'Step 7: Sending GRID_FRAME message');
-    self.postMessage({
-      type: 'GRID_FRAME',
-      imageBitmap: imageBitmap,
-      stamp: stamp
-    }, [imageBitmap]);
-    sendLog('INFO', 'GRID_FRAME message sent successfully');
-
-    sendLog('INFO', 'Step 8: Sending POSE message');
-    self.postMessage({
-      type: 'POSE',
-      pose: { x: 200, y: 200, theta: 0 },
-      stamp: stamp
-    });
-
-    sendLog('INFO', 'Step 9: Sending STATS update');
-    self.postMessage({
-      type: 'STATS',
-      stats: { fps: 30, wasmMs: 5.2, memMB: estimateMemoryMB() }
-    });
-
-    sendLog('INFO', '========== generateTestMap END (SUCCESS) ==========');
-  } catch (error) {
-    sendLog('ERROR', `generateTestMap ERROR: ${error.message}`, error.stack);
-    self.postMessage({
-      type: 'ERROR',
-      code: 'MAP_GENERATION_ERROR',
-      message: `テストマップ生成エラー: ${error.message}`
-    });
-  }
-}
-
-// ========================================
-// Test Animation (for play mode)
-// ========================================
-let animationFrameCount = 0;
-async function startTestAnimation() {
-  if (!isPlaying) return;
-
-  animationFrameCount++;
-  console.log('[worker] Animation frame:', animationFrameCount);
-
-  const width = 400;
-  const height = 400;
-
-  const canvas = new OffscreenCanvas(width, height);
-  const ctx = canvas.getContext('2d');
-
-  // Background
-  ctx.fillStyle = '#808080';
-  ctx.fillRect(0, 0, width, height);
-
-  // Free space
-  ctx.fillStyle = '#FFFFFF';
-  ctx.fillRect(50, 50, 300, 300);
-
-  // Animated obstacle
-  const offsetX = (animationFrameCount * 5) % 200;
-  ctx.fillStyle = '#000000';
-  ctx.fillRect(100 + offsetX, 150, 50, 50);
-
-  // Frame counter
-  ctx.fillStyle = '#FF0000';
-  ctx.font = 'bold 20px sans-serif';
-  ctx.fillText(`Frame ${animationFrameCount}`, 140, 30);
-
-  const imageBitmap = await canvas.transferToImageBitmap();
-  const stamp = Date.now() * 1000;
-
-  self.postMessage({
-    type: 'GRID_FRAME',
-    imageBitmap: imageBitmap,
-    stamp: stamp
-  }, [imageBitmap]);
-
-  self.postMessage({
-    type: 'POSE',
-    pose: { x: 100 + offsetX, y: 150, theta: 0 },
-    stamp: stamp
-  });
-
-  self.postMessage({
-    type: 'STATS',
-    stats: {
-      fps: 30,
-      wasmMs: 5.2 + Math.random() * 2,
-      memMB: estimateMemoryMB()
-    }
-  });
-
-  // Continue animation
-  setTimeout(() => startTestAnimation(), 100 / playbackSpeed);
 }
 
 function fakeExport() {
