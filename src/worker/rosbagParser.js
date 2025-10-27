@@ -78,17 +78,103 @@ export async function parseRosbagTopics(file) {
       }
     }
 
+    // index_pos を取得（インデックスセクションの位置）
+    const indexPosField = header.fields.get('index_pos');
+    let indexPos = null;
+    if (indexPosField && indexPosField.length >= 8) {
+      // 8バイトのuint64として読み取る（下位4バイトのみ使用）
+      const indexPosView = new DataView(indexPosField.buffer, indexPosField.byteOffset, indexPosField.byteLength);
+      indexPos = Number(indexPosView.getBigUint64(0, true));
+      console.log('[rosbagParser] Index section position:', indexPos);
+    }
+
     // トピック情報を格納
     const connections = new Map(); // connection_id -> {topic, type}
     const topics = new Map(); // topic_name -> {type, messageCount}
+    let totalRecordCount = 0; // 処理したレコード数の合計
 
-    let offset = header.nextOffset;
-    let recordCount = 0;
-    const maxRecords = 5000; // 最大読み取りレコード数（トピック検出には十分）
+    // インデックスセクションからCONNECTIONレコードを読み取る
+    if (indexPos !== null && indexPos < arrayBuffer.byteLength) {
+      console.log('[rosbagParser] Reading index section at position:', indexPos);
+      let offset = indexPos;
+      let recordCount = 0;
+      const maxRecords = 1000; // インデックスセクションのレコード数制限
 
-    // レコードを順次読み取り
-    // 読み込んだチャンク内のみを処理
-    while (offset < arrayBuffer.byteLength && recordCount < maxRecords) {
+      while (offset < arrayBuffer.byteLength && recordCount < maxRecords) {
+        try {
+          const record = readRecord(dataView, offset);
+
+          if (!record) {
+            console.log('[rosbagParser] Reached end of valid records at offset:', offset);
+            break;
+          }
+
+          const op = record.header.fields.get('op')?.[0];
+
+          // Connection レコード (op=0x07)
+          if (op === 0x07) {
+            const conn = record.header.fields.get('conn');
+            const topic = record.header.fields.get('topic');
+            const type = record.header.fields.get('type');
+
+            if (conn && topic && type) {
+              const connId = new DataView(conn.buffer, conn.byteOffset, conn.byteLength).getUint32(0, true);
+              const topicStr = new TextDecoder().decode(topic);
+              const typeStr = new TextDecoder().decode(type);
+
+              connections.set(connId, { topic: topicStr, type: typeStr });
+
+              if (!topics.has(topicStr)) {
+                topics.set(topicStr, { type: typeStr, messageCount: 0 });
+              }
+
+              console.log('[rosbagParser] Found connection:', connId, topicStr, typeStr);
+            }
+          }
+
+          // CHUNK_INFO レコード (op=0x06) - メッセージ数をカウント
+          if (op === 0x06) {
+            const count = record.header.fields.get('count');
+            const conn = record.header.fields.get('conn');
+
+            if (count && conn && count.length >= 4 && conn.length >= 4) {
+              const connId = new DataView(conn.buffer, conn.byteOffset, conn.byteLength).getUint32(0, true);
+              const messageCount = new DataView(count.buffer, count.byteOffset, count.byteLength).getUint32(0, true);
+
+              const connection = connections.get(connId);
+              if (connection) {
+                const topicData = topics.get(connection.topic);
+                if (topicData) {
+                  topicData.messageCount += messageCount;
+                }
+              }
+            }
+          }
+
+          offset = record.nextOffset;
+          recordCount++;
+
+          // 進捗ログ（100レコードごと）
+          if (recordCount % 100 === 0) {
+            console.log(`[rosbagParser] Processed ${recordCount} index records, found ${connections.size} connections`);
+          }
+        } catch (e) {
+          console.warn('[rosbagParser] Error reading index record at offset', offset, ':', e.message);
+          break;
+        }
+      }
+
+      totalRecordCount = recordCount;
+      console.log('[rosbagParser] Index section processing complete');
+    } else {
+      console.warn('[rosbagParser] No index_pos found or invalid, falling back to sequential scan');
+
+      // フォールバック: 先頭から順次スキャン（古い実装）
+      let offset = header.nextOffset;
+      let recordCount = 0;
+      const maxRecords = 5000;
+
+      while (offset < arrayBuffer.byteLength && recordCount < maxRecords) {
       try {
         const record = readRecord(dataView, offset);
 
@@ -135,29 +221,30 @@ export async function parseRosbagTopics(file) {
           }
         }
 
-        offset = record.nextOffset;
-        recordCount++;
+          offset = record.nextOffset;
+          recordCount++;
 
-        // 進捗ログ（500レコードごと）
-        if (recordCount % 500 === 0) {
-          console.log(`[rosbagParser] Processed ${recordCount} records, offset: ${offset}/${arrayBuffer.byteLength}`);
-        }
+          // 進捗ログ（500レコードごと）
+          if (recordCount % 500 === 0) {
+            console.log(`[rosbagParser] Processed ${recordCount} records, offset: ${offset}/${arrayBuffer.byteLength}`);
+          }
 
-        // すべてのトピックが見つかったら早期終了
-        // Connection レコードが一定期間見つからなければ、トピック検出完了とみなす
-        if (connections.size > 0 && recordCount > 1000) {
-          console.log('[rosbagParser] Topic detection likely complete, stopping early');
+          // すべてのトピックが見つかったら早期終了
+          if (connections.size > 0 && recordCount > 1000) {
+            console.log('[rosbagParser] Topic detection likely complete, stopping early');
+            break;
+          }
+        } catch (e) {
+          console.warn('[rosbagParser] Error reading record at offset', offset, ':', e.message);
           break;
         }
-      } catch (e) {
-        console.warn('[rosbagParser] Error reading record at offset', offset, ':', e.message);
-        // エラーが発生したら、そこで終了（部分的な結果を返す）
-        break;
       }
+
+      totalRecordCount = recordCount;
     }
 
     console.log('[rosbagParser] Parsing complete.');
-    console.log('[rosbagParser] Processed', recordCount, 'records');
+    console.log('[rosbagParser] Processed', totalRecordCount, 'records');
     console.log('[rosbagParser] Found', connections.size, 'connections');
     console.log('[rosbagParser] Found', topics.size, 'unique topics');
 
