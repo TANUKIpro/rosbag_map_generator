@@ -4,6 +4,8 @@
  * Rosbagファイルからトピック一覧を抽出し、メッセージデータを読み取る
  */
 
+import { decompressChunkData } from './compression.js';
+
 /**
  * Rosbagファイルを解析してトピック一覧を取得
  * 大きなファイルに対応するため、チャンク単位で読み込む
@@ -443,7 +445,7 @@ export async function extractMessages(file, topicName) {
           console.log('[rosbagParser] Found CHUNK at offset', offset);
 
           // CHUNKのデータ部分を解析
-          const chunkMessages = extractMessagesFromChunk(dataView, offset, targetConnId);
+          const chunkMessages = await extractMessagesFromChunk(dataView, offset, targetConnId);
           console.log('[rosbagParser] Extracted', chunkMessages.length, 'messages from chunk', chunkCount);
           messages.push(...chunkMessages);
         }
@@ -556,7 +558,7 @@ export function decodeLaserScan(data) {
 /**
  * CHUNKレコードからメッセージを抽出
  */
-function extractMessagesFromChunk(dataView, chunkOffset, targetConnId) {
+async function extractMessagesFromChunk(dataView, chunkOffset, targetConnId) {
   const messages = [];
 
   try {
@@ -575,36 +577,52 @@ function extractMessagesFromChunk(dataView, chunkOffset, targetConnId) {
     const compression = headerFields.fields.get('compression');
     const compressionStr = compression ? new TextDecoder().decode(compression) : 'none';
 
+    let chunkBytes = new Uint8Array(dataView.buffer, dataView.byteOffset + dataOffset, dataLen);
+    let chunkView = new DataView(dataView.buffer, dataView.byteOffset + dataOffset, dataLen);
+
     if (compressionStr !== 'none') {
-      console.warn('[extractMessagesFromChunk] Compressed chunks not yet supported:', compressionStr);
-      return messages;
+      let expectedSize = null;
+      const sizeField = headerFields.fields.get('size');
+      if (sizeField && sizeField.length >= 4) {
+        const sizeView = new DataView(sizeField.buffer, sizeField.byteOffset, sizeField.byteLength);
+        expectedSize = sizeView.getUint32(0, true);
+      }
+
+      try {
+        chunkBytes = await decompressChunkData(compressionStr, chunkBytes, expectedSize ?? null);
+      } catch (err) {
+        console.warn('[extractMessagesFromChunk] Failed to decompress chunk:', err.message);
+        throw err;
+      }
+
+      chunkView = new DataView(chunkBytes.buffer, chunkBytes.byteOffset, chunkBytes.byteLength);
     }
 
     // CHUNKデータ内のメッセージレコードを読み取る
-    let offset = dataOffset;
-    const chunkEnd = dataOffset + dataLen;
+    let offset = 0;
+    const chunkEnd = chunkBytes.byteLength;
     let messageCount = 0;
     let matchedCount = 0;
 
-    while (offset < chunkEnd && offset < dataView.byteLength) {
+    while (offset < chunkEnd) {
       try {
         // レコードヘッダー長
-        if (offset + 4 > dataView.byteLength) break;
-        const msgHeaderLen = dataView.getUint32(offset, true);
+        if (offset + 4 > chunkView.byteLength) break;
+        const msgHeaderLen = chunkView.getUint32(offset, true);
         offset += 4;
 
-        if (offset + msgHeaderLen > dataView.byteLength) break;
+        if (offset + msgHeaderLen > chunkView.byteLength) break;
 
         // ヘッダーを読み取る
-        const msgHeader = readHeaderFields(dataView, offset, msgHeaderLen);
+        const msgHeader = readHeaderFields(chunkView, offset, msgHeaderLen);
         offset += msgHeaderLen;
 
         // データ長
-        if (offset + 4 > dataView.byteLength) break;
-        const msgDataLen = dataView.getUint32(offset, true);
+        if (offset + 4 > chunkView.byteLength) break;
+        const msgDataLen = chunkView.getUint32(offset, true);
         offset += 4;
 
-        if (offset + msgDataLen > dataView.byteLength) break;
+        if (offset + msgDataLen > chunkView.byteLength) break;
 
         const op = msgHeader.fields.get('op')?.[0];
 
@@ -618,7 +636,7 @@ function extractMessagesFromChunk(dataView, chunkOffset, targetConnId) {
             if (connId === targetConnId) {
               matchedCount++;
               // メッセージデータを抽出
-              const messageData = new Uint8Array(dataView.buffer, offset, msgDataLen);
+              const messageData = chunkBytes.slice(offset, offset + msgDataLen);
 
               // タイムスタンプを取得
               const time = msgHeader.fields.get('time');
@@ -648,6 +666,7 @@ function extractMessagesFromChunk(dataView, chunkOffset, targetConnId) {
     console.log('[extractMessagesFromChunk] Found', messageCount, 'total messages,', matchedCount, 'matched target connection');
   } catch (e) {
     console.warn('[extractMessagesFromChunk] Error extracting from chunk:', e.message);
+    throw e;
   }
 
   return messages;
@@ -694,7 +713,11 @@ function readHeader(dataView, offset) {
     }
 
     // フィールドデータを取得
-    const fieldData = new Uint8Array(dataView.buffer, offset + headerOffset, fieldLen);
+    const absoluteOffset = dataView.byteOffset + offset + headerOffset;
+    if (absoluteOffset + fieldLen > dataView.buffer.byteLength) {
+      break;
+    }
+    const fieldData = new Uint8Array(dataView.buffer, absoluteOffset, fieldLen);
     headerOffset += fieldLen;
 
     // '=' で分割してキーと値を取得
@@ -788,7 +811,11 @@ function readHeaderFields(dataView, offset, length) {
     // フィールドデータの範囲チェック
     try {
       // フィールドデータを取得
-      const fieldData = new Uint8Array(dataView.buffer, offset + headerOffset, fieldLen);
+      const absoluteOffset = dataView.byteOffset + offset + headerOffset;
+      if (absoluteOffset + fieldLen > dataView.buffer.byteLength) {
+        break;
+      }
+      const fieldData = new Uint8Array(dataView.buffer, absoluteOffset, fieldLen);
       headerOffset += fieldLen;
 
       // '=' で分割
