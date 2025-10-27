@@ -1,7 +1,7 @@
 // ========================================
 // Imports
 // ========================================
-import { parseRosbagTopics } from './rosbagParser.js';
+import { parseRosbagTopics, extractMessages, decodeLaserScan } from './rosbagParser.js';
 
 // ========================================
 // Utility Functions (defined first)
@@ -131,10 +131,30 @@ async function handleOpenFile(file) {
       sendLog('INFO', `  - ${topic.name} (${topic.type}) - ${topic.messageCount} messages`);
     });
 
-    // Generate a test map to verify the pipeline
-    sendLog('INFO', 'Calling generateTestMap()');
-    await generateTestMap();
-    sendLog('INFO', 'generateTestMap() completed successfully');
+    // Find LaserScan topic
+    const laserScanTopic = topics.find(t => t.type === 'sensor_msgs/LaserScan');
+
+    if (laserScanTopic) {
+      sendLog('INFO', `Found LaserScan topic: ${laserScanTopic.name}`);
+
+      // Extract LaserScan messages
+      sendLog('INFO', 'Extracting LaserScan messages from rosbag...');
+      const messages = await extractMessages(file, laserScanTopic.name);
+      sendLog('INFO', `Extracted ${messages.length} LaserScan messages`);
+
+      if (messages.length > 0) {
+        // Generate map from LaserScan data
+        sendLog('INFO', 'Generating map from LaserScan data...');
+        await generateMapFromLaserScans(messages);
+        sendLog('INFO', 'Map generation completed successfully');
+      } else {
+        sendLog('WARN', 'No LaserScan messages found, generating test map');
+        await generateTestMap();
+      }
+    } else {
+      sendLog('WARN', 'No LaserScan topic found, generating test map');
+      await generateTestMap();
+    }
   } catch (error) {
     sendLog('ERROR', `Error in handleOpenFile: ${error.message}`, error.stack);
     self.postMessage({
@@ -191,6 +211,148 @@ function handleStop() {
 function handleSetSpeed(speed) {
   console.log('[worker] Speed change:', speed);
   playbackSpeed = speed;
+}
+
+// ========================================
+// Map Generation from LaserScan Data
+// ========================================
+async function generateMapFromLaserScans(messages) {
+  sendLog('INFO', '========== generateMapFromLaserScans START ==========');
+
+  try {
+    // Map configuration
+    const resolution = config.resolution; // meters per pixel
+    const mapWidth = config.width;
+    const mapHeight = config.height;
+
+    sendLog('INFO', `Map config: ${mapWidth}x${mapHeight}, resolution: ${resolution}m/pixel`);
+
+    // Create occupancy grid (0=unknown, 128=free, 255=occupied)
+    const grid = new Uint8Array(mapWidth * mapHeight);
+    grid.fill(128); // Initialize as free space
+
+    // Robot starts at center of map
+    const robotX = mapWidth / 2;
+    const robotY = mapHeight / 2;
+
+    sendLog('INFO', `Processing ${messages.length} LaserScan messages...`);
+
+    // Process each LaserScan message
+    let processedCount = 0;
+    for (const msg of messages) {
+      try {
+        // Decode LaserScan message
+        const scan = decodeLaserScan(msg.data);
+
+        // Convert scan points to grid coordinates
+        for (let i = 0; i < scan.ranges.length; i++) {
+          const range = scan.ranges[i];
+
+          // Skip invalid ranges
+          if (range < scan.range_min || range > scan.range_max || isNaN(range) || !isFinite(range)) {
+            continue;
+          }
+
+          // Calculate angle for this range reading
+          const angle = scan.angle_min + i * scan.angle_increment;
+
+          // Convert polar to Cartesian coordinates (in meters)
+          const x = range * Math.cos(angle);
+          const y = range * Math.sin(angle);
+
+          // Convert to grid coordinates
+          const gridX = Math.floor(robotX + x / resolution);
+          const gridY = Math.floor(robotY - y / resolution); // Invert Y for image coordinates
+
+          // Mark as occupied if within bounds
+          if (gridX >= 0 && gridX < mapWidth && gridY >= 0 && gridY < mapHeight) {
+            const index = gridY * mapWidth + gridX;
+            grid[index] = 0; // Mark as occupied (black)
+          }
+        }
+
+        processedCount++;
+
+        // Log progress every 50 messages
+        if (processedCount % 50 === 0) {
+          sendLog('INFO', `Processed ${processedCount}/${messages.length} scans`);
+        }
+      } catch (e) {
+        console.warn('[worker] Error processing LaserScan message:', e);
+      }
+    }
+
+    sendLog('INFO', `Finished processing ${processedCount} LaserScan messages`);
+
+    // Create canvas and draw map
+    sendLog('INFO', 'Creating canvas and drawing map...');
+    const canvas = new OffscreenCanvas(mapWidth, mapHeight);
+    const ctx = canvas.getContext('2d');
+
+    // Create ImageData from grid
+    const imageData = ctx.createImageData(mapWidth, mapHeight);
+    for (let i = 0; i < grid.length; i++) {
+      const value = grid[i];
+      // Convert occupancy values to RGB
+      // 0 = occupied (black), 128 = free (white), 255 = unknown (gray)
+      let rgb;
+      if (value === 0) {
+        rgb = 0; // Black for occupied
+      } else if (value === 128) {
+        rgb = 255; // White for free space
+      } else {
+        rgb = 200; // Light gray for unknown
+      }
+
+      const pixelIndex = i * 4;
+      imageData.data[pixelIndex] = rgb;     // R
+      imageData.data[pixelIndex + 1] = rgb; // G
+      imageData.data[pixelIndex + 2] = rgb; // B
+      imageData.data[pixelIndex + 3] = 255; // A
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+
+    // Draw robot position
+    ctx.fillStyle = '#FF0000';
+    ctx.beginPath();
+    ctx.arc(robotX, robotY, 5, 0, 2 * Math.PI);
+    ctx.fill();
+
+    sendLog('INFO', 'Converting canvas to ImageBitmap...');
+    const imageBitmap = canvas.transferToImageBitmap();
+
+    const stamp = Date.now() * 1000;
+
+    sendLog('INFO', 'Sending GRID_FRAME message...');
+    self.postMessage({
+      type: 'GRID_FRAME',
+      imageBitmap: imageBitmap,
+      stamp: stamp
+    }, [imageBitmap]);
+
+    sendLog('INFO', 'Sending POSE message...');
+    self.postMessage({
+      type: 'POSE',
+      pose: { x: robotX, y: robotY, theta: 0 },
+      stamp: stamp
+    });
+
+    sendLog('INFO', 'Sending STATS update...');
+    self.postMessage({
+      type: 'STATS',
+      stats: { fps: 0, wasmMs: 0, memMB: estimateMemoryMB() }
+    });
+
+    sendLog('INFO', '========== generateMapFromLaserScans END (SUCCESS) ==========');
+  } catch (error) {
+    sendLog('ERROR', `generateMapFromLaserScans ERROR: ${error.message}`, error.stack);
+    self.postMessage({
+      type: 'ERROR',
+      code: 'MAP_GENERATION_ERROR',
+      message: `マップ生成エラー: ${error.message}`
+    });
+  }
 }
 
 // ========================================
