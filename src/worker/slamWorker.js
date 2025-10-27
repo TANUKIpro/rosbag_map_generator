@@ -435,7 +435,7 @@ async function renderFrameAtIndex(index) {
     type: 'STATS',
     stats: {
       fps: Math.round(fps),
-      wasmMs: renderTime.toFixed(2),
+      wasmMs: renderTime,  // Send as number, not string
       memMB: estimateMemoryMB(),
       currentFrame: index + 1,
       totalFrames: scanMessages.length
