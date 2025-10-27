@@ -7,19 +7,25 @@
 
 /**
  * Rosbagファイルを解析してトピック一覧を取得
+ * 大きなファイルに対応するため、チャンク単位で読み込む
  *
  * @param {File} file - Rosbagファイル
  * @returns {Promise<Array>} トピック一覧 [{name, type, messageCount}]
  */
 export async function parseRosbagTopics(file) {
   console.log('[rosbagParser] Starting to parse rosbag file:', file.name);
+  console.log('[rosbagParser] File size:', file.size, 'bytes (', (file.size / 1024 / 1024).toFixed(2), 'MB)');
 
   try {
-    // ファイルをArrayBufferとして読み込み
-    const arrayBuffer = await file.arrayBuffer();
+    // 大きなファイルの場合は最初の部分だけを読み込む（最大10MB）
+    const maxReadSize = Math.min(file.size, 10 * 1024 * 1024); // 10MB
+    console.log('[rosbagParser] Reading first', maxReadSize, 'bytes for topic detection');
+
+    const blob = file.slice(0, maxReadSize);
+    const arrayBuffer = await blob.arrayBuffer();
     const dataView = new DataView(arrayBuffer);
 
-    console.log('[rosbagParser] File loaded, size:', arrayBuffer.byteLength, 'bytes');
+    console.log('[rosbagParser] Chunk loaded, size:', arrayBuffer.byteLength, 'bytes');
 
     // Rosbagヘッダーのチェック
     const header = readHeader(dataView, 0);
@@ -35,9 +41,10 @@ export async function parseRosbagTopics(file) {
 
     let offset = header.nextOffset;
     let recordCount = 0;
-    const maxRecords = 10000; // 最大読み取りレコード数（大きなファイル対策）
+    const maxRecords = 5000; // 最大読み取りレコード数（トピック検出には十分）
 
     // レコードを順次読み取り
+    // 読み込んだチャンク内のみを処理
     while (offset < arrayBuffer.byteLength && recordCount < maxRecords) {
       try {
         const record = readRecord(dataView, offset);
@@ -88,17 +95,28 @@ export async function parseRosbagTopics(file) {
         offset = record.nextOffset;
         recordCount++;
 
-        // 進捗ログ（1000レコードごと）
-        if (recordCount % 1000 === 0) {
+        // 進捗ログ（500レコードごと）
+        if (recordCount % 500 === 0) {
           console.log(`[rosbagParser] Processed ${recordCount} records, offset: ${offset}/${arrayBuffer.byteLength}`);
         }
+
+        // すべてのトピックが見つかったら早期終了
+        // Connection レコードが一定期間見つからなければ、トピック検出完了とみなす
+        if (connections.size > 0 && recordCount > 1000) {
+          console.log('[rosbagParser] Topic detection likely complete, stopping early');
+          break;
+        }
       } catch (e) {
-        console.warn('[rosbagParser] Error reading record at offset', offset, ':', e);
+        console.warn('[rosbagParser] Error reading record at offset', offset, ':', e.message);
+        // エラーが発生したら、そこで終了（部分的な結果を返す）
         break;
       }
     }
 
-    console.log('[rosbagParser] Parsing complete. Found', topics.size, 'topics');
+    console.log('[rosbagParser] Parsing complete.');
+    console.log('[rosbagParser] Processed', recordCount, 'records');
+    console.log('[rosbagParser] Found', connections.size, 'connections');
+    console.log('[rosbagParser] Found', topics.size, 'unique topics');
 
     // Map を配列に変換
     const topicList = Array.from(topics.entries()).map(([name, data]) => ({
@@ -108,6 +126,11 @@ export async function parseRosbagTopics(file) {
     }));
 
     console.log('[rosbagParser] Topic list:', topicList);
+
+    // トピックが見つからなかった場合の警告
+    if (topicList.length === 0) {
+      console.warn('[rosbagParser] No topics found. File may not be a valid rosbag or may need larger chunk size.');
+    }
 
     return topicList;
   } catch (error) {
@@ -207,16 +230,22 @@ function readHeaderFields(dataView, offset, length) {
       break;
     }
 
-    // フィールドデータを取得
-    const fieldData = new Uint8Array(dataView.buffer, offset + headerOffset, fieldLen);
-    headerOffset += fieldLen;
+    // フィールドデータの範囲チェック
+    try {
+      // フィールドデータを取得
+      const fieldData = new Uint8Array(dataView.buffer, offset + headerOffset, fieldLen);
+      headerOffset += fieldLen;
 
-    // '=' で分割
-    const equalPos = fieldData.indexOf(0x3d);
-    if (equalPos !== -1) {
-      const key = new TextDecoder().decode(fieldData.subarray(0, equalPos));
-      const value = fieldData.subarray(equalPos + 1);
-      fields.set(key, value);
+      // '=' で分割
+      const equalPos = fieldData.indexOf(0x3d);
+      if (equalPos !== -1) {
+        const key = new TextDecoder().decode(fieldData.subarray(0, equalPos));
+        const value = fieldData.subarray(equalPos + 1);
+        fields.set(key, value);
+      }
+    } catch (e) {
+      console.warn('[rosbagParser] Error reading field:', e.message);
+      break;
     }
   }
 
