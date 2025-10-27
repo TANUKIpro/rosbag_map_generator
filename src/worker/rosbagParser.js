@@ -1,3 +1,5 @@
+import { decompressBzip2 } from '../vendor/bzip2.js';
+
 /**
  * 簡易的なRosbagパーサー
  *
@@ -560,67 +562,62 @@ function extractMessagesFromChunk(dataView, chunkOffset, targetConnId) {
   const messages = [];
 
   try {
-    // CHUNKヘッダーを読み取る
     const headerLen = dataView.getUint32(chunkOffset, true);
     const headerFields = readHeaderFields(dataView, chunkOffset + 4, headerLen);
 
-    // データ長を読み取る
     const dataLenOffset = chunkOffset + 4 + headerLen;
     const dataLen = dataView.getUint32(dataLenOffset, true);
     const dataOffset = dataLenOffset + 4;
 
     console.log('[extractMessagesFromChunk] Chunk at offset', chunkOffset, 'data length:', dataLen);
 
-    // 圧縮フィールドをチェック
     const compression = headerFields.fields.get('compression');
     const compressionStr = compression ? new TextDecoder().decode(compression) : 'none';
 
-    if (compressionStr !== 'none') {
-      console.warn('[extractMessagesFromChunk] Compressed chunks not yet supported:', compressionStr);
+    let chunkBytes;
+    if (compressionStr === 'none') {
+      chunkBytes = new Uint8Array(dataView.buffer, dataOffset, dataLen);
+    } else if (compressionStr === 'bz2') {
+      const compressed = new Uint8Array(dataView.buffer, dataOffset, dataLen);
+      chunkBytes = decompressBzip2(compressed);
+      console.log('[extractMessagesFromChunk] Decompressed bz2 chunk length:', chunkBytes.length);
+    } else {
+      console.warn('[extractMessagesFromChunk] Unsupported compression:', compressionStr);
       return messages;
     }
 
-    // CHUNKデータ内のメッセージレコードを読み取る
-    let offset = dataOffset;
-    const chunkEnd = dataOffset + dataLen;
+    const chunkView = new DataView(chunkBytes.buffer, chunkBytes.byteOffset, chunkBytes.byteLength);
+
+    let offset = 0;
+    const chunkEnd = chunkBytes.byteLength;
     let messageCount = 0;
     let matchedCount = 0;
 
-    while (offset < chunkEnd && offset < dataView.byteLength) {
+    while (offset < chunkEnd) {
       try {
-        // レコードヘッダー長
-        if (offset + 4 > dataView.byteLength) break;
-        const msgHeaderLen = dataView.getUint32(offset, true);
+        if (offset + 4 > chunkEnd) break;
+        const msgHeaderLen = chunkView.getUint32(offset, true);
         offset += 4;
 
-        if (offset + msgHeaderLen > dataView.byteLength) break;
-
-        // ヘッダーを読み取る
-        const msgHeader = readHeaderFields(dataView, offset, msgHeaderLen);
+        if (offset + msgHeaderLen > chunkEnd) break;
+        const msgHeader = readHeaderFields(chunkView, offset, msgHeaderLen);
         offset += msgHeaderLen;
 
-        // データ長
-        if (offset + 4 > dataView.byteLength) break;
-        const msgDataLen = dataView.getUint32(offset, true);
+        if (offset + 4 > chunkEnd) break;
+        const msgDataLen = chunkView.getUint32(offset, true);
         offset += 4;
 
-        if (offset + msgDataLen > dataView.byteLength) break;
+        if (offset + msgDataLen > chunkEnd) break;
 
         const op = msgHeader.fields.get('op')?.[0];
-
-        // MESSAGE_DATA レコード (op=0x02)
         if (op === 0x02) {
           messageCount++;
           const conn = msgHeader.fields.get('conn');
           if (conn) {
             const connId = new DataView(conn.buffer, conn.byteOffset, conn.byteLength).getUint32(0, true);
-
             if (connId === targetConnId) {
               matchedCount++;
-              // メッセージデータを抽出
-              const messageData = new Uint8Array(dataView.buffer, offset, msgDataLen);
-
-              // タイムスタンプを取得
+              const messageData = new Uint8Array(chunkBytes.buffer, chunkBytes.byteOffset + offset, msgDataLen);
               const time = msgHeader.fields.get('time');
               let timestamp = 0;
               if (time && time.length >= 8) {
@@ -631,8 +628,8 @@ function extractMessagesFromChunk(dataView, chunkOffset, targetConnId) {
               }
 
               messages.push({
-                timestamp: timestamp,
-                data: messageData
+                timestamp,
+                data: messageData.slice()
               });
             }
           }
