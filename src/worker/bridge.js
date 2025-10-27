@@ -1,6 +1,20 @@
-const worker = new Worker('./worker/slamWorker.js', { type: 'module' });
+console.log('[bridge] Creating worker from: ./src/worker/slamWorker.js');
+const worker = new Worker('./src/worker/slamWorker.js', { type: 'module' });
+console.log('[bridge] Worker instance created');
+
+// エラーハンドリング
+worker.onerror = (error) => {
+  console.error('[bridge] ========== WORKER ERROR ==========');
+  console.error('[bridge] Worker error:', error);
+  console.error('[bridge] Message:', error.message);
+  console.error('[bridge] Filename:', error.filename);
+  console.error('[bridge] Line:', error.lineno);
+  console.error('[bridge] Worker failed to load. Check the path and syntax.');
+};
 
 export function createWorkerBridge(handlers, debugPanel = null) {
+  console.log('[bridge] Setting up worker message handler');
+
   worker.onmessage = event => {
     const { type } = event.data;
     console.log('[bridge] Received from worker:', type, event.data);

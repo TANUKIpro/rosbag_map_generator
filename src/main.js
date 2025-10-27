@@ -27,6 +27,9 @@ const toast = initToast(document.getElementById('toast'));
 /** デバッグパネル */
 const debugPanel = new DebugPanel();
 
+console.log('[main] Initializing worker bridge...');
+debugPanel.logMessage('UI', 'アプリケーション初期化開始');
+
 /** Web Workerブリッジ - バックグラウンド処理との通信 */
 const workerBridge = createWorkerBridge({
   onPose: (pose, stamp) => {
@@ -50,6 +53,9 @@ const workerBridge = createWorkerBridge({
     toast.show(`${code}: ${message}`, 'error');
   }
 }, debugPanel);
+
+console.log('[main] Worker bridge created');
+debugPanel.logMessage('UI', 'Worker bridge初期化完了');
 
 // ========================================
 // UIコンポーネントの初期化
