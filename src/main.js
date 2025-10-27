@@ -98,14 +98,22 @@ const ctx = canvas.getContext('2d');
 
 // 占有グリッドフレームの更新 - Workerから受信したImageBitmapを描画
 appState.on('gridFrame', ({ imageBitmap }) => {
-  if (!imageBitmap) return;
+  console.log('[main] gridFrame event received, imageBitmap:', imageBitmap);
+
+  if (!imageBitmap) {
+    console.warn('[main] No imageBitmap provided');
+    return;
+  }
 
   // キャンバスサイズを画像に合わせて調整
+  console.log('[main] Setting canvas size to:', imageBitmap.width, 'x', imageBitmap.height);
   canvas.width = imageBitmap.width;
   canvas.height = imageBitmap.height;
 
   // 画像を描画
+  console.log('[main] Drawing image to canvas');
   ctx.drawImage(imageBitmap, 0, 0, canvas.width, canvas.height);
+  console.log('[main] Image drawn successfully');
 });
 
 // パフォーマンス統計の更新 - FPS、WASM実行時間、メモリ使用量

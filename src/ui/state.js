@@ -118,7 +118,9 @@ export class AppState extends Emitter {
    * @param {ImageBitmap} imageBitmap - 地図画像
    */
   updateGridFrame(stamp, imageBitmap) {
+    console.log('[state] updateGridFrame called, stamp:', stamp, 'imageBitmap:', imageBitmap);
     this.emit('gridFrame', { stamp, imageBitmap });
+    console.log('[state] gridFrame event emitted');
   }
 
   /**
