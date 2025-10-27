@@ -1,3 +1,10 @@
+/**
+ * ROS Bag Map Generator - メインエントリーポイント
+ *
+ * このアプリケーションは、ROSバッグファイルから2D占有グリッド地図を生成します。
+ * すべての処理はブラウザ内で完結し、バックエンドサーバーは不要です。
+ */
+
 import { initDropzone } from './ui/dropzone.js';
 import { initTopicSelectors } from './ui/topicSelectors.js';
 import { initPlaybackControls } from './ui/playbackControls.js';
@@ -6,9 +13,17 @@ import { initToast } from './ui/toast.js';
 import { AppState } from './ui/state.js';
 import { createWorkerBridge } from './worker/bridge.js';
 
+// ========================================
+// アプリケーション状態とコア機能の初期化
+// ========================================
+
+/** アプリケーション全体の状態管理 */
 const appState = new AppState();
+
+/** トースト通知システム */
 const toast = initToast(document.getElementById('toast'));
 
+/** Web Workerブリッジ - バックグラウンド処理との通信 */
 const workerBridge = createWorkerBridge({
   onPose: (pose, stamp) => appState.updatePose(stamp, pose),
   onGridFrame: (bitmap, stamp) => appState.updateGridFrame(stamp, bitmap),
@@ -17,6 +32,11 @@ const workerBridge = createWorkerBridge({
   onError: (code, message) => toast.show(`${code}: ${message}`, 'error')
 });
 
+// ========================================
+// UIコンポーネントの初期化
+// ========================================
+
+// ファイルドロップゾーン - ROSバッグファイルの読み込み
 initDropzone({
   element: document.getElementById('dropzone'),
   toast,
@@ -27,6 +47,7 @@ initDropzone({
   }
 });
 
+// トピック選択 - /scan, /odom, /tfの設定
 initTopicSelectors({
   scan: document.getElementById('scan-topic'),
   odom: document.getElementById('odom-topic'),
@@ -39,6 +60,7 @@ initTopicSelectors({
   }
 });
 
+// 地図設定パネル - 解像度、サイズ、間引き設定
 initConfigPanel({
   resolution: document.getElementById('resolution'),
   width: document.getElementById('map-width'),
@@ -52,6 +74,7 @@ initConfigPanel({
   }
 });
 
+// 再生コントロール - 再生/一時停止/停止、エクスポート
 initPlaybackControls({
   play: document.getElementById('play'),
   pause: document.getElementById('pause'),
@@ -66,29 +89,45 @@ initPlaybackControls({
   bridge: workerBridge
 });
 
+// ========================================
+// キャンバス描画とリアルタイム更新
+// ========================================
+
 const canvas = document.getElementById('map-canvas');
 const ctx = canvas.getContext('2d');
 
+// 占有グリッドフレームの更新 - Workerから受信したImageBitmapを描画
 appState.on('gridFrame', ({ imageBitmap }) => {
   if (!imageBitmap) return;
+
+  // キャンバスサイズを画像に合わせて調整
   canvas.width = imageBitmap.width;
   canvas.height = imageBitmap.height;
+
+  // 画像を描画
   ctx.drawImage(imageBitmap, 0, 0, canvas.width, canvas.height);
 });
 
+// パフォーマンス統計の更新 - FPS、WASM実行時間、メモリ使用量
 appState.on('stats', stats => {
   document.getElementById('fps').textContent = stats.fps.toFixed(1);
   document.getElementById('wasm-time').textContent = `${stats.wasmMs.toFixed(1)} ms`;
   document.getElementById('memory').textContent = `${stats.memMB.toFixed(0)} MB`;
 });
 
+// タイムスタンプの更新 - ロボットの現在位置の時刻
 appState.on('pose', ({ stamp }) => {
+  // マイクロ秒からミリ秒に変換してDateオブジェクトを作成
   const date = new Date(stamp / 1e6);
   const formatted = date.toISOString().split('T')[1]?.slice(0, -1) ?? '--:--:--';
   document.getElementById('timestamp').textContent = formatted;
 });
 
-// Kick off with placeholder grid for visual feedback.
+// ========================================
+// 初期表示 - プレースホルダー
+// ========================================
+
+// ファイルが読み込まれるまでのプレースホルダーメッセージを表示
 ctx.fillStyle = '#111822';
 ctx.fillRect(0, 0, canvas.width, canvas.height);
 ctx.fillStyle = '#1f9d92';

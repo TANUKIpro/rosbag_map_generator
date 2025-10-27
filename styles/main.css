@@ -76,6 +76,12 @@ body {
   cursor: pointer;
 }
 
+/* 子要素がクリックイベントを妨げないようにする */
+.dropzone * {
+  pointer-events: none;
+  user-select: none;
+}
+
 .dropzone.dragover {
   border-color: var(--accent-strong);
   background: rgba(61, 214, 197, 0.16);
