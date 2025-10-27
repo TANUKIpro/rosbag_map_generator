@@ -12,6 +12,7 @@ import { initConfigPanel } from './ui/configPanel.js';
 import { initToast } from './ui/toast.js';
 import { AppState } from './ui/state.js';
 import { createWorkerBridge } from './worker/bridge.js';
+import { DebugPanel } from './ui/debugPanel.js';
 
 // ========================================
 // アプリケーション状態とコア機能の初期化
@@ -23,14 +24,44 @@ const appState = new AppState();
 /** トースト通知システム */
 const toast = initToast(document.getElementById('toast'));
 
+/** デバッグパネル */
+const debugPanel = new DebugPanel();
+
+console.log('[main] Initializing worker bridge...');
+debugPanel.logMessage('UI', 'アプリケーション初期化開始');
+
 /** Web Workerブリッジ - バックグラウンド処理との通信 */
 const workerBridge = createWorkerBridge({
-  onPose: (pose, stamp) => appState.updatePose(stamp, pose),
-  onGridFrame: (bitmap, stamp) => appState.updateGridFrame(stamp, bitmap),
-  onStats: stats => appState.updateStats(stats),
-  onExportDone: files => appState.handleExport(files, toast),
-  onError: (code, message) => toast.show(`${code}: ${message}`, 'error')
-});
+  onTopicsAvailable: (topics) => {
+    console.log('[main] Topics available:', topics);
+    debugPanel.recordAvailableTopics(topics);
+    appState.setAvailableTopics(topics);
+    toast.show(`${topics.length}個のトピックを検出しました`, 'success');
+  },
+  onPose: (pose, stamp) => {
+    debugPanel.recordWorkerMessage('POSE', { pose, stamp });
+    appState.updatePose(stamp, pose);
+  },
+  onGridFrame: (bitmap, stamp) => {
+    debugPanel.recordWorkerMessage('GRID_FRAME', { imageBitmap: bitmap, stamp });
+    appState.updateGridFrame(stamp, bitmap);
+  },
+  onStats: stats => {
+    debugPanel.recordWorkerMessage('STATS', { stats });
+    appState.updateStats(stats);
+  },
+  onExportDone: files => {
+    debugPanel.recordWorkerMessage('EXPORT_DONE', { files });
+    appState.handleExport(files, toast);
+  },
+  onError: (code, message) => {
+    debugPanel.recordWorkerMessage('ERROR', { code, message });
+    toast.show(`${code}: ${message}`, 'error');
+  }
+}, debugPanel);
+
+console.log('[main] Worker bridge created');
+debugPanel.logMessage('UI', 'Worker bridge初期化完了');
 
 // ========================================
 // UIコンポーネントの初期化
@@ -42,6 +73,7 @@ initDropzone({
   toast,
   onFile: file => {
     appState.setFile(file);
+    debugPanel.updateFile(file.name);
     workerBridge.openFile(file);
     toast.show(`${file.name} を読み込みました`, 'success');
   }
@@ -55,6 +87,7 @@ initTopicSelectors({
   applyButton: document.getElementById('apply-topics'),
   appState,
   onApply: topics => {
+    debugPanel.updateTopics(topics);
     workerBridge.setTopics(topics);
     toast.show('トピック設定を送信しました', 'info');
   }
@@ -98,14 +131,32 @@ const ctx = canvas.getContext('2d');
 
 // 占有グリッドフレームの更新 - Workerから受信したImageBitmapを描画
 appState.on('gridFrame', ({ imageBitmap }) => {
-  if (!imageBitmap) return;
+  console.log('[main] gridFrame event received, imageBitmap:', imageBitmap);
+
+  // デバッグパネルに記録
+  debugPanel.recordGridFrame(imageBitmap);
+
+  if (!imageBitmap) {
+    console.warn('[main] No imageBitmap provided');
+    debugPanel.logMessage('CANVAS', 'ERROR: imageBitmapがnullです', 'error');
+    return;
+  }
 
   // キャンバスサイズを画像に合わせて調整
+  console.log('[main] Setting canvas size to:', imageBitmap.width, 'x', imageBitmap.height);
   canvas.width = imageBitmap.width;
   canvas.height = imageBitmap.height;
 
   // 画像を描画
-  ctx.drawImage(imageBitmap, 0, 0, canvas.width, canvas.height);
+  console.log('[main] Drawing image to canvas');
+  try {
+    ctx.drawImage(imageBitmap, 0, 0, canvas.width, canvas.height);
+    console.log('[main] Image drawn successfully');
+    debugPanel.logMessage('CANVAS', `描画成功: ${canvas.width}x${canvas.height}`, 'success');
+  } catch (error) {
+    console.error('[main] Failed to draw image:', error);
+    debugPanel.logMessage('CANVAS', `描画失敗: ${error.message}`, 'error');
+  }
 });
 
 // パフォーマンス統計の更新 - FPS、WASM実行時間、メモリ使用量

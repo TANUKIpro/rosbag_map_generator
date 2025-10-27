@@ -92,6 +92,37 @@
         </div>
       </section>
     </main>
+
+    <!-- Debug Panel -->
+    <div id="debug-panel" class="debug-panel">
+      <div class="debug-header">
+        <h3>🔍 デバッグパネル</h3>
+        <button id="debug-toggle" class="debug-toggle">最小化</button>
+        <button id="debug-clear" class="debug-clear">クリア</button>
+      </div>
+      <div class="debug-content">
+        <div class="debug-section">
+          <h4>現在の状態</h4>
+          <div class="debug-info">
+            <div>ファイル: <span id="debug-file">なし</span></div>
+            <div>トピック (scan): <span id="debug-topic-scan">未設定</span></div>
+            <div>トピック (odom): <span id="debug-topic-odom">未設定</span></div>
+            <div>トピック (tf): <span id="debug-topic-tf">未設定</span></div>
+            <div>GRID_FRAME受信数: <span id="debug-frame-count">0</span></div>
+            <div>最終ImageBitmap: <span id="debug-imagebitmap">なし</span></div>
+          </div>
+        </div>
+        <div class="debug-section">
+          <h4>メッセージ履歴 (最新10件)</h4>
+          <div id="debug-messages" class="debug-messages"></div>
+        </div>
+        <div class="debug-section">
+          <h4>Worker内部ログ (最新5件)</h4>
+          <div id="debug-worker-logs" class="debug-messages"></div>
+        </div>
+      </div>
+    </div>
+
     <output id="toast" class="toast" role="status" aria-live="polite"></output>
     <script type="module" src="src/main.js"></script>
   </body>

@@ -60,11 +60,54 @@ export function initTopicSelectors({ scan, odom, tf, applyButton, appState, onAp
     onApply(topics);
   });
 
-  // ファイルが読み込まれたときの処理
-  appState.on('file', () => {
-    // TODO: バッグファイルのメタデータから実際のトピックを検出して反映する
-    // 現在はプレースホルダーオプションのみ表示
-    applyButton.disabled = false;
+  // トピック一覧が利用可能になったときの処理
+  appState.on('availableTopics', ({ topics }) => {
+    console.log('[topicSelectors] Available topics:', topics);
+
+    // トピックをタイプ別に分類
+    const scanTopics = [];
+    const odomTopics = [];
+    const tfTopics = [];
+
+    topics.forEach(topic => {
+      const type = topic.type.toLowerCase();
+
+      // LaserScan トピック
+      if (type.includes('laserscan')) {
+        scanTopics.push(topic.name);
+      }
+      // Odometry トピック
+      else if (type.includes('odometry')) {
+        odomTopics.push(topic.name);
+      }
+      // TF トピック
+      else if (type.includes('tf')) {
+        tfTopics.push(topic.name);
+      }
+    });
+
+    console.log('[topicSelectors] Scan topics:', scanTopics);
+    console.log('[topicSelectors] Odom topics:', odomTopics);
+    console.log('[topicSelectors] TF topics:', tfTopics);
+
+    // セレクトボックスを更新
+    if (scanTopics.length > 0) {
+      populate(scan, scanTopics);
+      scan.value = scanTopics[0]; // 最初のトピックを自動選択
+    }
+
+    if (odomTopics.length > 0) {
+      populate(odom, [UNUSED_OPTION, ...odomTopics]);
+      odom.value = odomTopics[0]; // 最初のトピックを自動選択
+    }
+
+    if (tfTopics.length > 0) {
+      populate(tf, [UNUSED_OPTION, ...tfTopics]);
+      tf.value = tfTopics[0]; // 最初のトピックを自動選択
+    }
+
+    // ボタン状態を更新
+    updateButtonState();
   });
 
   // 初期状態のボタン状態を設定
