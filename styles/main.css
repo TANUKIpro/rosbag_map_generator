@@ -197,6 +197,7 @@ button:not(:disabled):hover {
   justify-content: center;
   box-shadow: var(--shadow);
   overflow: hidden;
+  position: relative;
 }
 
 canvas {
@@ -204,6 +205,72 @@ canvas {
   max-height: 100%;
   background: rgba(0, 0, 0, 0.75);
   border-radius: 12px;
+  cursor: grab;
+}
+
+canvas:active {
+  cursor: grabbing;
+}
+
+.map-controls {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: rgba(22, 26, 33, 0.95);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 1rem;
+  min-width: 220px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(10px);
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  z-index: 10;
+}
+
+.map-controls h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--accent);
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.control-group {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.control-group span {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.control-group input {
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 18, 24, 0.9);
+  color: inherit;
+  width: 80px;
+  font-size: 0.85rem;
+}
+
+.zoom-info {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--panel-border);
+  text-align: center;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.zoom-info span {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .status-bar {

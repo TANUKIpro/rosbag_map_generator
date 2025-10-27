@@ -129,6 +129,44 @@ initPlaybackControls({
 const canvas = document.getElementById('map-canvas');
 const ctx = canvas.getContext('2d');
 
+// ズーム機能の状態管理
+let zoomLevel = 1.0;
+let currentImageBitmap = null;
+let panOffset = { x: 0, y: 0 };
+let isDragging = false;
+let lastMousePos = { x: 0, y: 0 };
+
+// ズームレベル表示を更新
+function updateZoomDisplay() {
+  const zoomLevelElement = document.getElementById('zoom-level');
+  if (zoomLevelElement) {
+    zoomLevelElement.textContent = `${Math.round(zoomLevel * 100)}%`;
+  }
+}
+
+// キャンバスを再描画
+function redrawCanvas() {
+  if (!currentImageBitmap) return;
+
+  // キャンバスのクリア
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // 変換をリセット
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  // 中心を基準にズーム
+  const centerX = canvas.width / 2;
+  const centerY = canvas.height / 2;
+
+  // 変換を適用
+  ctx.translate(centerX + panOffset.x, centerY + panOffset.y);
+  ctx.scale(zoomLevel, zoomLevel);
+  ctx.translate(-centerX, -centerY);
+
+  // 画像を描画
+  ctx.drawImage(currentImageBitmap, 0, 0, canvas.width, canvas.height);
+}
+
 // 占有グリッドフレームの更新 - Workerから受信したImageBitmapを描画
 appState.on('gridFrame', ({ imageBitmap }) => {
   console.log('[main] gridFrame event received, imageBitmap:', imageBitmap);
@@ -147,16 +185,60 @@ appState.on('gridFrame', ({ imageBitmap }) => {
   canvas.width = imageBitmap.width;
   canvas.height = imageBitmap.height;
 
+  // 現在のImageBitmapを保存
+  currentImageBitmap = imageBitmap;
+
   // 画像を描画
   console.log('[main] Drawing image to canvas');
   try {
-    ctx.drawImage(imageBitmap, 0, 0, canvas.width, canvas.height);
+    redrawCanvas();
     console.log('[main] Image drawn successfully');
     debugPanel.logMessage('CANVAS', `描画成功: ${canvas.width}x${canvas.height}`, 'success');
   } catch (error) {
     console.error('[main] Failed to draw image:', error);
     debugPanel.logMessage('CANVAS', `描画失敗: ${error.message}`, 'error');
   }
+});
+
+// マウスホイールでズーム
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+
+  const zoomSpeed = 0.1;
+  const delta = e.deltaY > 0 ? -zoomSpeed : zoomSpeed;
+
+  zoomLevel = Math.max(0.1, Math.min(5.0, zoomLevel + delta));
+
+  updateZoomDisplay();
+  redrawCanvas();
+});
+
+// マウスドラッグでパン
+canvas.addEventListener('mousedown', (e) => {
+  isDragging = true;
+  lastMousePos = { x: e.clientX, y: e.clientY };
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  if (!isDragging) return;
+
+  const dx = e.clientX - lastMousePos.x;
+  const dy = e.clientY - lastMousePos.y;
+
+  panOffset.x += dx;
+  panOffset.y += dy;
+
+  lastMousePos = { x: e.clientX, y: e.clientY };
+
+  redrawCanvas();
+});
+
+canvas.addEventListener('mouseup', () => {
+  isDragging = false;
+});
+
+canvas.addEventListener('mouseleave', () => {
+  isDragging = false;
 });
 
 // パフォーマンス統計の更新 - FPS、WASM実行時間、メモリ使用量
