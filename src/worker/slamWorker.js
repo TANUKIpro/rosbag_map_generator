@@ -227,9 +227,14 @@ function handlePlay(speed) {
   playbackSpeed = speed || playbackSpeed;
   isPlaying = true;
   sendLog('INFO', `Playback started at ${playbackSpeed}x speed`);
+  sendLog('INFO', `Total messages available: ${scanMessages.length}`);
+
+  // DEBUG: Display the last frame immediately for testing
+  sendLog('INFO', '[DEBUG] Rendering last frame for testing...');
+  renderFrameAtIndex(scanMessages.length - 1);
 
   // Start playback loop
-  startPlaybackLoop();
+  // startPlaybackLoop();
 }
 
 function handlePause() {
@@ -272,7 +277,10 @@ function handleSetSpeed(speed) {
 // Playback Loop
 // ========================================
 async function startPlaybackLoop() {
+  sendLog('INFO', `[DEBUG] startPlaybackLoop called - isPlaying: ${isPlaying}, currentMessageIndex: ${currentMessageIndex}, total: ${scanMessages.length}`);
+
   if (!isPlaying || scanMessages.length === 0) {
+    sendLog('WARN', `[DEBUG] Exiting playback loop - isPlaying: ${isPlaying}, messages: ${scanMessages.length}`);
     return;
   }
 
@@ -296,6 +304,8 @@ async function startPlaybackLoop() {
 
       // Calculate time difference in milliseconds
       const timeDiff = (nextMsg.timestamp - currentMsg.timestamp) / 1000000; // nanoseconds to milliseconds
+
+      sendLog('INFO', `[DEBUG] Frame ${currentMessageIndex}/${scanMessages.length} - timeDiff: ${timeDiff.toFixed(2)}ms, delay: ${(timeDiff / playbackSpeed).toFixed(2)}ms`);
 
       // Adjust for playback speed
       const delay = Math.max(1, timeDiff / playbackSpeed);
