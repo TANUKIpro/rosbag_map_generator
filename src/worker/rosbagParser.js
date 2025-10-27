@@ -27,12 +27,55 @@ export async function parseRosbagTopics(file) {
 
     console.log('[rosbagParser] Chunk loaded, size:', arrayBuffer.byteLength, 'bytes');
 
+    // デバッグ: 最初の100バイトを16進数で表示
+    const firstBytes = new Uint8Array(arrayBuffer, 0, Math.min(100, arrayBuffer.byteLength));
+    console.log('[rosbagParser] First 100 bytes (hex):');
+    let hexStr = '';
+    for (let i = 0; i < firstBytes.length; i++) {
+      hexStr += firstBytes[i].toString(16).padStart(2, '0') + ' ';
+      if ((i + 1) % 16 === 0) {
+        console.log(hexStr);
+        hexStr = '';
+      }
+    }
+    if (hexStr) console.log(hexStr);
+
+    // デバッグ: 最初の4バイトを様々な方法で解釈
+    console.log('[rosbagParser] First 4 bytes as uint32 (little endian):', dataView.getUint32(0, true));
+    console.log('[rosbagParser] First 4 bytes as uint32 (big endian):', dataView.getUint32(0, false));
+
+    // Rosbag v2.0 のマジックナンバーをチェック
+    const magicBytes = new Uint8Array(arrayBuffer, 0, Math.min(13, arrayBuffer.byteLength));
+    const magic = new TextDecoder().decode(magicBytes);
+    console.log('[rosbagParser] Magic string:', magic);
+
+    if (!magic.startsWith('#ROSBAG V2.0')) {
+      console.warn('[rosbagParser] Warning: File does not start with expected magic string "#ROSBAG V2.0"');
+      console.warn('[rosbagParser] Detected:', magic);
+    }
+
+    // マジックナンバーの後にある実際のヘッダー開始位置を探す
+    let headerStart = 13; // "#ROSBAG V2.0\n" = 13 bytes
+    if (magic.startsWith('#ROSBAG V2.0')) {
+      console.log('[rosbagParser] Valid rosbag v2.0 file detected');
+    } else {
+      // マジックナンバーがない場合は、最初からヘッダーと仮定
+      headerStart = 0;
+    }
+
     // Rosbagヘッダーのチェック
-    const header = readHeader(dataView, 0);
+    const header = readHeader(dataView, headerStart);
     console.log('[rosbagParser] Bag header:', header);
 
-    if (!header.fields.has('op') || header.fields.get('op')[0] !== 0x03) {
-      throw new Error('Invalid rosbag file: missing or invalid bag header');
+    if (!header.fields.has('op')) {
+      console.warn('[rosbagParser] Warning: No "op" field in bag header');
+      console.warn('[rosbagParser] Available fields:', Array.from(header.fields.keys()));
+    } else {
+      const op = header.fields.get('op')[0];
+      console.log('[rosbagParser] Op code:', op);
+      if (op !== 0x03) {
+        console.warn('[rosbagParser] Warning: Expected op=0x03 (BAG_HEADER), got:', op);
+      }
     }
 
     // トピック情報を格納
@@ -143,17 +186,53 @@ export async function parseRosbagTopics(file) {
  * Rosbagヘッダーを読み取る
  */
 function readHeader(dataView, offset) {
+  console.log('[readHeader] Reading header at offset:', offset);
+
+  // オフセットの妥当性チェック
+  if (offset + 4 > dataView.byteLength) {
+    throw new Error(`Cannot read header: offset ${offset} + 4 exceeds buffer length ${dataView.byteLength}`);
+  }
+
   const headerLen = dataView.getUint32(offset, true);
+  console.log('[readHeader] Header length:', headerLen);
+
+  // ヘッダー長の妥当性チェック
+  if (headerLen > dataView.byteLength || headerLen > 1024 * 1024) {
+    console.error('[readHeader] Invalid header length:', headerLen);
+    console.error('[readHeader] Buffer length:', dataView.byteLength);
+    console.error('[readHeader] Offset:', offset);
+    console.error('[readHeader] First 20 bytes from offset:');
+    const debugBytes = new Uint8Array(dataView.buffer, offset, Math.min(20, dataView.byteLength - offset));
+    console.error('[readHeader] Hex:', Array.from(debugBytes).map(b => b.toString(16).padStart(2, '0')).join(' '));
+    throw new Error(`Invalid header length: ${headerLen} (max 1MB allowed, buffer size: ${dataView.byteLength})`);
+  }
+
   offset += 4;
 
   const fields = new Map();
   let headerOffset = 0;
 
   while (headerOffset < headerLen) {
+    if (offset + headerOffset + 4 > dataView.byteLength) {
+      console.warn('[readHeader] Reached end of buffer while reading fields');
+      break;
+    }
+
     const fieldLen = dataView.getUint32(offset + headerOffset, true);
     headerOffset += 4;
 
     if (fieldLen === 0) break;
+
+    // フィールド長の妥当性チェック
+    if (fieldLen > headerLen || fieldLen > 1024 * 1024) {
+      console.warn('[readHeader] Invalid field length:', fieldLen, 'at offset:', offset + headerOffset - 4);
+      break;
+    }
+
+    if (offset + headerOffset + fieldLen > dataView.byteLength) {
+      console.warn('[readHeader] Field exceeds buffer length');
+      break;
+    }
 
     // フィールドデータを取得
     const fieldData = new Uint8Array(dataView.buffer, offset + headerOffset, fieldLen);
@@ -165,8 +244,11 @@ function readHeader(dataView, offset) {
       const key = new TextDecoder().decode(fieldData.subarray(0, equalPos));
       const value = fieldData.subarray(equalPos + 1);
       fields.set(key, value);
+      console.log('[readHeader] Field:', key, '=', value.length, 'bytes');
     }
   }
+
+  console.log('[readHeader] Total fields found:', fields.size);
 
   return {
     fields,
