@@ -64,24 +64,7 @@
         <div class="canvas-container">
           <canvas id="map-canvas" width="800" height="800" role="img" aria-label="Occupancy grid preview"></canvas>
           <div class="map-controls">
-            <h3>マップ設定</h3>
-            <label class="control-group">
-              <span>解像度 (m)</span>
-              <input id="resolution" type="number" value="0.05" step="0.01" min="0.01" />
-            </label>
-            <label class="control-group">
-              <span>マップ幅 (m)</span>
-              <input id="map-width" type="number" value="50" step="1" min="5" />
-            </label>
-            <label class="control-group">
-              <span>マップ高さ (m)</span>
-              <input id="map-height" type="number" value="50" step="1" min="5" />
-            </label>
-            <label class="control-group">
-              <span>スキャン間引き</span>
-              <input id="downsample" type="number" value="1" step="1" min="1" />
-            </label>
-            <button id="apply-config" class="secondary">設定を送信</button>
+            <h3>表示設定</h3>
             <div class="zoom-info">
               <span>ズーム: <span id="zoom-level">100%</span></span>
             </div>
@@ -89,6 +72,7 @@
         </div>
         <div class="status-bar">
           <div>時刻: <span id="timestamp">--:--:--.--</span></div>
+          <div>フレーム: <span id="frame-info">-/-</span></div>
           <div>FPS: <span id="fps">0</span></div>
           <div>WASM: <span id="wasm-time">0 ms</span></div>
           <div>メモリ: <span id="memory">0 MB</span></div>

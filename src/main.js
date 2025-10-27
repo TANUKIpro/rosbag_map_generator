@@ -8,7 +8,7 @@
 import { initDropzone } from './ui/dropzone.js';
 import { initTopicSelectors } from './ui/topicSelectors.js';
 import { initPlaybackControls } from './ui/playbackControls.js';
-import { initConfigPanel } from './ui/configPanel.js';
+// import { initConfigPanel } from './ui/configPanel.js'; // Removed: using fixed config values
 import { initToast } from './ui/toast.js';
 import { AppState } from './ui/state.js';
 import { createWorkerBridge } from './worker/bridge.js';
@@ -93,19 +93,8 @@ initTopicSelectors({
   }
 });
 
-// 地図設定パネル - 解像度、サイズ、間引き設定
-initConfigPanel({
-  resolution: document.getElementById('resolution'),
-  width: document.getElementById('map-width'),
-  height: document.getElementById('map-height'),
-  downsample: document.getElementById('downsample'),
-  applyButton: document.getElementById('apply-config'),
-  appState,
-  onSubmit: config => {
-    workerBridge.sendConfig(config);
-    toast.show('地図設定を更新しました', 'info');
-  }
-});
+// 地図設定パネル - 削除（固定値を使用）
+// Config panel removed - using fixed optimal values in worker
 
 // 再生コントロール - 再生/一時停止/停止、エクスポート
 initPlaybackControls({
@@ -246,6 +235,11 @@ appState.on('stats', stats => {
   document.getElementById('fps').textContent = stats.fps.toFixed(1);
   document.getElementById('wasm-time').textContent = `${stats.wasmMs.toFixed(1)} ms`;
   document.getElementById('memory').textContent = `${stats.memMB.toFixed(0)} MB`;
+
+  // フレーム情報の更新（再生中のみ）
+  if (stats.currentFrame !== undefined && stats.totalFrames !== undefined) {
+    document.getElementById('frame-info').textContent = `${stats.currentFrame}/${stats.totalFrames}`;
+  }
 });
 
 // タイムスタンプの更新 - ロボットの現在位置の時刻

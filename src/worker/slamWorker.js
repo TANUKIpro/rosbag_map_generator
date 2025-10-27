@@ -41,9 +41,15 @@ sendLog('INFO', 'Worker initialized and ready');
 
 let currentFile = null;
 let topics = { scan: '/scan', odom: '/odom', tf: '/tf' };
-let config = { resolution: 0.05, width: 2000, height: 2000, downsample: 1 };
+// Fixed config values for optimal map generation
+// resolution: 0.05 m/pixel (5cm per pixel)
+// Map size: 1000x1000 pixels = 50m x 50m physical size
+let config = { resolution: 0.05, width: 1000, height: 1000 };
 let isPlaying = false;
 let playbackSpeed = 1.0;
+let scanMessages = [];
+let currentMessageIndex = 0;
+let playbackTimer = null;
 
 self.addEventListener('message', async event => {
   const { type } = event.data;
@@ -59,7 +65,8 @@ self.addEventListener('message', async event => {
       handleSetTopics(event.data);
       break;
     case 'CONFIG':
-      handleConfig(event.data.config);
+      // Config changes disabled - using fixed values
+      console.log('[worker] CONFIG message ignored - using fixed config values');
       break;
     case 'PLAY':
       handlePlay(event.data.speed);
@@ -168,7 +175,12 @@ async function handleSetTopics(data) {
       sendLog('INFO', `Extracted ${messages.length} messages from ${topics.scan}`);
 
       if (messages.length > 0) {
-        sendLog('INFO', 'Generating map from LaserScan data...');
+        // Store messages for playback
+        scanMessages = messages;
+        currentMessageIndex = 0;
+        sendLog('INFO', `Stored ${scanMessages.length} messages for playback`);
+
+        sendLog('INFO', 'Generating initial map from LaserScan data...');
         await generateMapFromLaserScans(messages);
         sendLog('INFO', 'Map generation completed successfully');
       } else {
@@ -210,27 +222,238 @@ function handleConfig(newConfig) {
 // ========================================
 function handlePlay(speed) {
   console.log('[worker] Play requested, speed:', speed);
-  sendLog('INFO', `Playback started at ${speed}x speed`);
-  isPlaying = true;
-  playbackSpeed = speed || playbackSpeed;
 
-  // TODO: Implement actual playback of rosbag messages
-  sendLog('WARN', 'Playback feature is not yet implemented');
+  if (scanMessages.length === 0) {
+    sendLog('WARN', 'No messages available for playback. Please load a file and select topics first.');
+    return;
+  }
+
+  playbackSpeed = speed || playbackSpeed;
+  isPlaying = true;
+  sendLog('INFO', `Playback started at ${playbackSpeed}x speed`);
+  sendLog('INFO', `Total messages available: ${scanMessages.length}`);
+
+  // DEBUG: Display the last frame immediately for testing
+  sendLog('INFO', '[DEBUG] Rendering last frame for testing...');
+  renderFrameAtIndex(scanMessages.length - 1);
+
+  // Start playback loop
+  // startPlaybackLoop();
 }
 
 function handlePause() {
   console.log('[worker] Pause requested');
+  sendLog('INFO', 'Playback paused');
   isPlaying = false;
+
+  // Clear timer if running
+  if (playbackTimer !== null) {
+    clearTimeout(playbackTimer);
+    playbackTimer = null;
+  }
 }
 
 function handleStop() {
   console.log('[worker] Stop requested');
+  sendLog('INFO', 'Playback stopped');
   isPlaying = false;
+  currentMessageIndex = 0;
+
+  // Clear timer if running
+  if (playbackTimer !== null) {
+    clearTimeout(playbackTimer);
+    playbackTimer = null;
+  }
+
+  // Reset to initial state - regenerate full map
+  if (scanMessages.length > 0) {
+    generateMapFromLaserScans(scanMessages);
+  }
 }
 
 function handleSetSpeed(speed) {
   console.log('[worker] Speed change:', speed);
   playbackSpeed = speed;
+  sendLog('INFO', `Playback speed changed to ${speed}x`);
+}
+
+// ========================================
+// Playback Loop
+// ========================================
+async function startPlaybackLoop() {
+  sendLog('INFO', `[DEBUG] startPlaybackLoop called - isPlaying: ${isPlaying}, currentMessageIndex: ${currentMessageIndex}, total: ${scanMessages.length}`);
+
+  if (!isPlaying || scanMessages.length === 0) {
+    sendLog('WARN', `[DEBUG] Exiting playback loop - isPlaying: ${isPlaying}, messages: ${scanMessages.length}`);
+    return;
+  }
+
+  try {
+    await renderFrameAtIndex(currentMessageIndex);
+
+    // Move to next message
+    currentMessageIndex++;
+
+    // Check if we've reached the end
+    if (currentMessageIndex >= scanMessages.length) {
+      sendLog('INFO', 'Playback completed - reached end of messages');
+      handleStop();
+      return;
+    }
+
+    // Calculate delay until next frame
+    if (isPlaying && currentMessageIndex < scanMessages.length) {
+      const currentMsg = scanMessages[currentMessageIndex - 1];
+      const nextMsg = scanMessages[currentMessageIndex];
+
+      // Calculate time difference in milliseconds
+      const timeDiff = (nextMsg.timestamp - currentMsg.timestamp) / 1000000; // nanoseconds to milliseconds
+
+      sendLog('INFO', `[DEBUG] Frame ${currentMessageIndex}/${scanMessages.length} - timeDiff: ${timeDiff.toFixed(2)}ms, delay: ${(timeDiff / playbackSpeed).toFixed(2)}ms`);
+
+      // Adjust for playback speed
+      const delay = Math.max(1, timeDiff / playbackSpeed);
+
+      // Schedule next frame
+      playbackTimer = setTimeout(() => {
+        startPlaybackLoop();
+      }, delay);
+    }
+  } catch (error) {
+    sendLog('ERROR', `Error during playback: ${error.message}`, error.stack);
+    handleStop();
+  }
+}
+
+async function renderFrameAtIndex(index) {
+  if (index < 0 || index >= scanMessages.length) {
+    return;
+  }
+
+  const startTime = performance.now();
+
+  // Get messages up to current index for progressive map building
+  const messagesToRender = scanMessages.slice(0, index + 1);
+
+  // Map configuration
+  const resolution = config.resolution;
+  const mapWidth = config.width;
+  const mapHeight = config.height;
+
+  // Create occupancy grid
+  const grid = new Uint8Array(mapWidth * mapHeight);
+  grid.fill(200); // Initialize as unknown (dark gray)
+
+  // Robot starts at center of map
+  const robotX = mapWidth / 2;
+  const robotY = mapHeight / 2;
+
+  // Process messages to build progressive map
+  for (const msg of messagesToRender) {
+    try {
+      const scan = decodeLaserScan(msg.data);
+
+      // Convert scan points to grid coordinates
+      for (let i = 0; i < scan.ranges.length; i++) {
+        const range = scan.ranges[i];
+
+        if (range < scan.range_min || range > scan.range_max || isNaN(range) || !isFinite(range)) {
+          continue;
+        }
+
+        const angle = scan.angle_min + i * scan.angle_increment;
+        const x = range * Math.cos(angle);
+        const y = range * Math.sin(angle);
+
+        const gridX = Math.floor(robotX + x / resolution);
+        const gridY = Math.floor(robotY - y / resolution);
+
+        if (gridX >= 0 && gridX < mapWidth && gridY >= 0 && gridY < mapHeight) {
+          const gridIndex = gridY * mapWidth + gridX;
+          grid[gridIndex] = 0; // Mark as occupied (will be shown as red)
+        }
+      }
+    } catch (e) {
+      console.warn('[worker] Error processing scan in playback:', e);
+    }
+  }
+
+  // Create canvas and draw map
+  const canvas = new OffscreenCanvas(mapWidth, mapHeight);
+  const ctx = canvas.getContext('2d');
+
+  // Create ImageData from grid
+  const imageData = ctx.createImageData(mapWidth, mapHeight);
+  for (let i = 0; i < grid.length; i++) {
+    const value = grid[i];
+    let r, g, b;
+    if (value === 0) {
+      // Occupied (obstacle) - RED for visibility
+      r = 255;
+      g = 0;
+      b = 0;
+    } else if (value === 128) {
+      // Free space - WHITE
+      r = 255;
+      g = 255;
+      b = 255;
+    } else {
+      // Unknown - DARK GRAY
+      r = 50;
+      g = 50;
+      b = 50;
+    }
+
+    const pixelIndex = i * 4;
+    imageData.data[pixelIndex] = r;     // R
+    imageData.data[pixelIndex + 1] = g; // G
+    imageData.data[pixelIndex + 2] = b; // B
+    imageData.data[pixelIndex + 3] = 255; // A
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+
+  // Draw robot position (YELLOW to distinguish from obstacles)
+  ctx.fillStyle = '#FFFF00';
+  ctx.beginPath();
+  ctx.arc(robotX, robotY, 10, 0, 2 * Math.PI);
+  ctx.fill();
+
+  // Convert to ImageBitmap
+  const imageBitmap = canvas.transferToImageBitmap();
+
+  const currentMsg = scanMessages[index];
+  const stamp = currentMsg.timestamp;
+
+  // Send frame to UI
+  self.postMessage({
+    type: 'GRID_FRAME',
+    imageBitmap: imageBitmap,
+    stamp: stamp
+  }, [imageBitmap]);
+
+  // Send pose update
+  self.postMessage({
+    type: 'POSE',
+    pose: { x: robotX, y: robotY, theta: 0 },
+    stamp: stamp
+  });
+
+  // Calculate and send stats
+  const endTime = performance.now();
+  const renderTime = endTime - startTime;
+  const fps = 1000 / renderTime;
+
+  self.postMessage({
+    type: 'STATS',
+    stats: {
+      fps: Math.round(fps),
+      wasmMs: renderTime,  // Send as number, not string
+      memMB: estimateMemoryMB(),
+      currentFrame: index + 1,
+      totalFrames: scanMessages.length
+    }
+  });
 }
 
 // ========================================
@@ -247,9 +470,9 @@ async function generateMapFromLaserScans(messages) {
 
     sendLog('INFO', `Map config: ${mapWidth}x${mapHeight}, resolution: ${resolution}m/pixel`);
 
-    // Create occupancy grid (0=unknown, 128=free, 255=occupied)
+    // Create occupancy grid (0=occupied/obstacle, 128=free, 200=unknown)
     const grid = new Uint8Array(mapWidth * mapHeight);
-    grid.fill(128); // Initialize as free space
+    grid.fill(200); // Initialize as unknown (dark gray)
 
     // Robot starts at center of map
     const robotX = mapWidth / 2;
@@ -287,7 +510,7 @@ async function generateMapFromLaserScans(messages) {
           // Mark as occupied if within bounds
           if (gridX >= 0 && gridX < mapWidth && gridY >= 0 && gridY < mapHeight) {
             const index = gridY * mapWidth + gridX;
-            grid[index] = 0; // Mark as occupied (black)
+            grid[index] = 0; // Mark as occupied (will be shown as red)
           }
         }
 
@@ -314,29 +537,37 @@ async function generateMapFromLaserScans(messages) {
     for (let i = 0; i < grid.length; i++) {
       const value = grid[i];
       // Convert occupancy values to RGB
-      // 0 = occupied (black), 128 = free (white), 255 = unknown (gray)
-      let rgb;
+      let r, g, b;
       if (value === 0) {
-        rgb = 0; // Black for occupied
+        // Occupied (obstacle) - RED for visibility
+        r = 255;
+        g = 0;
+        b = 0;
       } else if (value === 128) {
-        rgb = 255; // White for free space
+        // Free space - WHITE
+        r = 255;
+        g = 255;
+        b = 255;
       } else {
-        rgb = 200; // Light gray for unknown
+        // Unknown - DARK GRAY
+        r = 50;
+        g = 50;
+        b = 50;
       }
 
       const pixelIndex = i * 4;
-      imageData.data[pixelIndex] = rgb;     // R
-      imageData.data[pixelIndex + 1] = rgb; // G
-      imageData.data[pixelIndex + 2] = rgb; // B
+      imageData.data[pixelIndex] = r;     // R
+      imageData.data[pixelIndex + 1] = g; // G
+      imageData.data[pixelIndex + 2] = b; // B
       imageData.data[pixelIndex + 3] = 255; // A
     }
 
     ctx.putImageData(imageData, 0, 0);
 
-    // Draw robot position
-    ctx.fillStyle = '#FF0000';
+    // Draw robot position (YELLOW to distinguish from obstacles)
+    ctx.fillStyle = '#FFFF00';
     ctx.beginPath();
-    ctx.arc(robotX, robotY, 5, 0, 2 * Math.PI);
+    ctx.arc(robotX, robotY, 10, 0, 2 * Math.PI);
     ctx.fill();
 
     sendLog('INFO', 'Converting canvas to ImageBitmap...');
