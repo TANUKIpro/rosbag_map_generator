@@ -256,13 +256,13 @@ function handlePlay(speed) {
   isPlaying = true;
   sendLog('INFO', `Playback started at ${playbackSpeed}x speed`);
   sendLog('INFO', `Total messages available: ${scanMessages.length}`);
+  sendLog('INFO', `Odometry messages available: ${odomMessages.length}`);
 
-  // DEBUG: Display the last frame immediately for testing
-  sendLog('INFO', '[DEBUG] Rendering last frame for testing...');
-  renderFrameAtIndex(scanMessages.length - 1);
+  // Reset to beginning
+  currentMessageIndex = 0;
 
   // Start playback loop
-  // startPlaybackLoop();
+  startPlaybackLoop();
 }
 
 function handlePause() {
@@ -421,9 +421,9 @@ async function renderFrameAtIndex(index) {
         const worldX = robotX + range * Math.cos(worldAngle);
         const worldY = robotY + range * Math.sin(worldAngle);
 
-        // Convert to grid coordinates
+        // Convert to grid coordinates (invert Y for image coordinates)
         const gridX = Math.floor((worldX - mapOriginX) / resolution);
-        const gridY = Math.floor((worldY - mapOriginY) / resolution);
+        const gridY = Math.floor((mapOriginY + (mapHeight * resolution) - worldY) / resolution);
 
         if (gridX >= 0 && gridX < mapWidth && gridY >= 0 && gridY < mapHeight) {
           const gridIndex = gridY * mapWidth + gridX;
@@ -487,7 +487,7 @@ async function renderFrameAtIndex(index) {
       try {
         const odom = decodeOdometry(odomMsg.data);
         const gridX = Math.floor((odom.pose.x - mapOriginX) / resolution);
-        const gridY = Math.floor((odom.pose.y - mapOriginY) / resolution);
+        const gridY = Math.floor((mapOriginY + (mapHeight * resolution) - odom.pose.y) / resolution);
 
         if (gridX >= 0 && gridX < mapWidth && gridY >= 0 && gridY < mapHeight) {
           if (firstPoint) {
@@ -507,7 +507,7 @@ async function renderFrameAtIndex(index) {
   // Draw current robot position (YELLOW to distinguish from trajectory)
   if (currentRobotPose) {
     const robotGridX = Math.floor((currentRobotPose.x - mapOriginX) / resolution);
-    const robotGridY = Math.floor((currentRobotPose.y - mapOriginY) / resolution);
+    const robotGridY = Math.floor((mapOriginY + (mapHeight * resolution) - currentRobotPose.y) / resolution);
 
     if (robotGridX >= 0 && robotGridX < mapWidth && robotGridY >= 0 && robotGridY < mapHeight) {
       ctx.fillStyle = '#FFFF00';
@@ -521,8 +521,9 @@ async function renderFrameAtIndex(index) {
       ctx.beginPath();
       ctx.moveTo(robotGridX, robotGridY);
       const arrowLength = 20;
+      // In image coordinates, Y is inverted, so we need to negate the Y component
       const arrowX = robotGridX + arrowLength * Math.cos(currentRobotPose.yaw);
-      const arrowY = robotGridY + arrowLength * Math.sin(currentRobotPose.yaw);
+      const arrowY = robotGridY - arrowLength * Math.sin(currentRobotPose.yaw);
       ctx.lineTo(arrowX, arrowY);
       ctx.stroke();
     }
@@ -685,6 +686,7 @@ async function generateMapFromLaserScans(messages) {
 
     // Process each LaserScan message
     let processedCount = 0;
+    let totalPoints = 0;
     for (const msg of messages) {
       try {
         // Decode LaserScan message
@@ -701,7 +703,15 @@ async function generateMapFromLaserScans(messages) {
         const robotY = robotPose ? robotPose.y : 0;
         const robotYaw = robotPose ? robotPose.yaw : 0;
 
+        // Log first scan for debugging
+        if (processedCount === 0) {
+          sendLog('INFO', `First scan - Robot pose: (${robotX.toFixed(3)}, ${robotY.toFixed(3)}, ${robotYaw.toFixed(3)})`);
+          sendLog('INFO', `Scan range: [${scan.angle_min.toFixed(3)}, ${scan.angle_max.toFixed(3)}], ${scan.ranges.length} points`);
+          sendLog('INFO', `Range limits: [${scan.range_min.toFixed(3)}, ${scan.range_max.toFixed(3)}]`);
+        }
+
         // Convert scan points to grid coordinates
+        let validPoints = 0;
         for (let i = 0; i < scan.ranges.length; i++) {
           const range = scan.ranges[i];
 
@@ -710,17 +720,19 @@ async function generateMapFromLaserScans(messages) {
             continue;
           }
 
+          validPoints++;
+
           // Calculate angle for this range reading in robot frame
           const angle = scan.angle_min + i * scan.angle_increment;
 
-          // Transform to world frame
+          // Transform to world frame using robot pose
           const worldAngle = angle + robotYaw;
           const worldX = robotX + range * Math.cos(worldAngle);
           const worldY = robotY + range * Math.sin(worldAngle);
 
-          // Convert to grid coordinates
+          // Convert to grid coordinates (invert Y for image coordinates)
           const gridX = Math.floor((worldX - mapOriginX) / resolution);
-          const gridY = Math.floor((worldY - mapOriginY) / resolution);
+          const gridY = Math.floor((mapOriginY + (mapHeight * resolution) - worldY) / resolution);
 
           // Mark as occupied if within bounds
           if (gridX >= 0 && gridX < mapWidth && gridY >= 0 && gridY < mapHeight) {
@@ -729,18 +741,19 @@ async function generateMapFromLaserScans(messages) {
           }
         }
 
+        totalPoints += validPoints;
         processedCount++;
 
         // Log progress every 50 messages
         if (processedCount % 50 === 0) {
-          sendLog('INFO', `Processed ${processedCount}/${messages.length} scans`);
+          sendLog('INFO', `Processed ${processedCount}/${messages.length} scans, ${totalPoints} total points`);
         }
       } catch (e) {
         console.warn('[worker] Error processing LaserScan message:', e);
       }
     }
 
-    sendLog('INFO', `Finished processing ${processedCount} LaserScan messages`);
+    sendLog('INFO', `Finished processing ${processedCount} LaserScan messages, ${totalPoints} total points`);
 
     // Create canvas and draw map
     sendLog('INFO', 'Creating canvas and drawing map...');
@@ -786,11 +799,12 @@ async function generateMapFromLaserScans(messages) {
       ctx.beginPath();
 
       let firstPoint = true;
+      let trajectoryPoints = 0;
       for (const odomMsg of odomMessages) {
         try {
           const odom = decodeOdometry(odomMsg.data);
           const gridX = Math.floor((odom.pose.x - mapOriginX) / resolution);
-          const gridY = Math.floor((odom.pose.y - mapOriginY) / resolution);
+          const gridY = Math.floor((mapOriginY + (mapHeight * resolution) - odom.pose.y) / resolution);
 
           if (gridX >= 0 && gridX < mapWidth && gridY >= 0 && gridY < mapHeight) {
             if (firstPoint) {
@@ -799,6 +813,7 @@ async function generateMapFromLaserScans(messages) {
             } else {
               ctx.lineTo(gridX, gridY);
             }
+            trajectoryPoints++;
           }
         } catch (e) {
           // Skip invalid odometry messages
@@ -806,6 +821,7 @@ async function generateMapFromLaserScans(messages) {
         }
       }
       ctx.stroke();
+      sendLog('INFO', `Drew trajectory with ${trajectoryPoints} points`);
     }
 
     sendLog('INFO', 'Converting canvas to ImageBitmap...');
