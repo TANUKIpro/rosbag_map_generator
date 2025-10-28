@@ -6,7 +6,33 @@ This repository currently contains the product vision, requirements, and archite
 
 ## Getting started
 
-Open `index.html` in a modern Chromium, Firefox, or Edge browser. The MVP is under active development; core functionality is stubbed but the user interface and messaging pipeline are scaffolded to match the specification.
+**⚠️ 重要: ローカルサーバーが必要です**
+
+このアプリケーションはES6モジュールを使用しているため、`file:///` プロトコルで直接 `index.html` を開くと動作しません。必ずローカルサーバー経由でアクセスしてください。
+
+### 方法1: Pythonサーバー（推奨）
+
+```bash
+python3 start-server.py
+```
+
+その後、ブラウザで [http://localhost:8000](http://localhost:8000) を開いてください。
+
+### 方法2: Node.jsサーバー
+
+```bash
+npm run serve
+```
+
+その後、ブラウザで [http://localhost:8000](http://localhost:8000) を開いてください。
+
+### 方法3: 手動でPythonサーバー起動
+
+```bash
+python3 -m http.server 8000
+```
+
+その後、ブラウザで [http://localhost:8000](http://localhost:8000) を開いてください。
 
 ## Development
 

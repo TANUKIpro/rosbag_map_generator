@@ -1,0 +1,17 @@
+{
+  "name": "rosbag-map-generator",
+  "version": "1.0.0",
+  "description": "ローカルbagから2D占有グリッド地図を生成",
+  "scripts": {
+    "start": "python3 start-server.py",
+    "serve": "npx http-server -p 8000 -c-1 --cors"
+  },
+  "keywords": [
+    "ros",
+    "rosbag",
+    "mapping",
+    "occupancy-grid"
+  ],
+  "author": "",
+  "license": "MIT"
+}
