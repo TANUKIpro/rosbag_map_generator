@@ -517,6 +517,92 @@ export function decodeLaserScan(data) {
   };
 }
 
+/**
+ * Odometryメッセージをデコード (nav_msgs/Odometry)
+ */
+export function decodeOdometry(data) {
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let offset = 0;
+
+  // Header
+  const seq = view.getUint32(offset, true);
+  offset += 4;
+
+  const stampSec = view.getUint32(offset, true);
+  offset += 4;
+  const stampNsec = view.getUint32(offset, true);
+  offset += 4;
+
+  const frameIdLen = view.getUint32(offset, true);
+  offset += 4;
+  const frameId = new TextDecoder().decode(new Uint8Array(data.buffer, data.byteOffset + offset, frameIdLen));
+  offset += frameIdLen;
+
+  // child_frame_id
+  const childFrameIdLen = view.getUint32(offset, true);
+  offset += 4;
+  const childFrameId = new TextDecoder().decode(new Uint8Array(data.buffer, data.byteOffset + offset, childFrameIdLen));
+  offset += childFrameIdLen;
+
+  // PoseWithCovariance - Pose - Position
+  const posX = view.getFloat64(offset, true);
+  offset += 8;
+  const posY = view.getFloat64(offset, true);
+  offset += 8;
+  const posZ = view.getFloat64(offset, true);
+  offset += 8;
+
+  // PoseWithCovariance - Pose - Orientation (Quaternion)
+  const oriX = view.getFloat64(offset, true);
+  offset += 8;
+  const oriY = view.getFloat64(offset, true);
+  offset += 8;
+  const oriZ = view.getFloat64(offset, true);
+  offset += 8;
+  const oriW = view.getFloat64(offset, true);
+  offset += 8;
+
+  // Convert quaternion to yaw (2D rotation)
+  // yaw = atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))
+  const yaw = Math.atan2(2 * (oriW * oriZ + oriX * oriY), 1 - 2 * (oriY * oriY + oriZ * oriZ));
+
+  // Skip covariance (36 float64 values = 288 bytes)
+  offset += 36 * 8;
+
+  // TwistWithCovariance - Twist - Linear
+  const linVelX = view.getFloat64(offset, true);
+  offset += 8;
+  const linVelY = view.getFloat64(offset, true);
+  offset += 8;
+  const linVelZ = view.getFloat64(offset, true);
+  offset += 8;
+
+  // TwistWithCovariance - Twist - Angular
+  const angVelX = view.getFloat64(offset, true);
+  offset += 8;
+  const angVelY = view.getFloat64(offset, true);
+  offset += 8;
+  const angVelZ = view.getFloat64(offset, true);
+  offset += 8;
+
+  return {
+    seq,
+    stamp: stampSec + stampNsec / 1e9,
+    frame_id: frameId,
+    child_frame_id: childFrameId,
+    pose: {
+      x: posX,
+      y: posY,
+      z: posZ,
+      yaw: yaw
+    },
+    twist: {
+      linear: { x: linVelX, y: linVelY, z: linVelZ },
+      angular: { x: angVelX, y: angVelY, z: angVelZ }
+    }
+  };
+}
+
 // ========== ユーティリティ関数 ==========
 
 /**
